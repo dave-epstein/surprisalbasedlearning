@@ -20,13 +20,13 @@ NUM_ACTIONS = 4 + (1 if PREDICT_NEXT_ACTION else 0)
 PHI_SIZE = 32*3*3
 LEARNING_RATE = 1e-3
 BETA = 0
-BATCH_SIZE = 4
+BATCH_SIZE = 20
 SKIP_DECAY_CONSTANT = 0.8**BATCH_SIZE
 TEST_SPLIT_PCT = 0.1
 LENS_SIZE = 33
 IMG_COVG_PCT = 1.5
 UPDATE_FREQ = 1000
-NUM_EPOCHS = 3
+NUM_EPOCHS = 100
 
 dtypes = torch.cuda if torch.cuda.is_available() else torch
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -188,9 +188,10 @@ class StateFeaturePredictor(nn.Module):
     def forward(self, s_t0, a_t0):
         with torch.no_grad():
             # TODO does setting no_grad stop phi from being affected in SFP backprop?
-            a_t0_onehot = a_t0.to_onehot(dtype=torch.float).to(device)
-            v = torch.cat((self.phi(to_phi_input(s_t0)), a_t0_onehot), 1)
-            return self.fc2(self.fc1(v))
+            phi_s_t0 = self.phi(to_phi_input(s_t0))
+            a_t0_onehot = a_t0.to_onehot(dtype=torch.float).to(device)[:phi_s_t0.shape[0]]
+            v = torch.cat((phi_s_t0, a_t0_onehot), 1)
+        return self.fc2(self.fc1(v))
 
 
 class ActionPolicy():
@@ -246,7 +247,7 @@ def loss_fn(a_hat, a, phi_hat, phi, adj_acts):
     fwd_loss = F.mse_loss(phi_hat, phi)
     if sum(adj_acts) < len(adj_acts):
         inv_loss = F.cross_entropy(
-            a_hat[~adj_acts], a.to_onehot()[:len(adj_acts)].argmax(1)[~adj_acts])
+            a_hat[~adj_acts], a.to_onehot()[:len(adj_acts)].argmax(1)[~adj_acts].to(device))
     else:
         inv_loss = 0
     return BETA*fwd_loss + (1-BETA)*inv_loss
@@ -357,7 +358,7 @@ if __name__ == "__main__":
 
                     # manually keep track of action accuracy - 25% is random guess
                     total_guess += len(batch[0])
-                    correct_guess += sum(torch.argmax(a_t0.to_onehot(), dim=1)
+                    correct_guess += sum(torch.argmax(a_t0.to_onehot(), dim=1).to(device)
                                          == torch.argmax(a_hat, dim=1)).item()
 
                     # calculate loss
@@ -378,7 +379,7 @@ if __name__ == "__main__":
                     loss.backward()
                     optimizer.step()
 
-                ctr += 1
+                ctr += BATCH_SIZE
                 batch_ctr += 1
 
                 s_t0 = s_t1
@@ -410,7 +411,7 @@ if __name__ == "__main__":
 
                     # manually keep track of action accuracy - 25% is random guess
                     total_guess += len(batch[0])
-                    correct_guess += sum(torch.argmax(a_t0.to_onehot(), dim=1)
+                    correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1)
                                          == torch.argmax(a_hat, dim=1)).item()
 
                     # calculate loss
