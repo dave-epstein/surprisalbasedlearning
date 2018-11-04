@@ -396,7 +396,7 @@ if __name__ == "__main__":
     total_guess = 0
     correct_guess = 0
 
-    print('TESTING----------------------------')
+    print('-TESTING----------------------------')
 
     with torch.no_grad():
         for batch in test_data_loader:
