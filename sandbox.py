@@ -10,6 +10,8 @@ import os.path
 import random
 from collections import OrderedDict
 import skimage
+import skimage.io
+import skimage.transform
 from enum import Enum
 from math import ceil
 
@@ -28,6 +30,7 @@ NUM_EPOCHS = 3
 
 dtypes = torch.cuda if torch.cuda.is_available() else torch
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 
 def to_phi_input(s):
     return to_tensor_f(s).view(len(s), 3, LENS_SIZE, -1)
@@ -185,7 +188,7 @@ class StateFeaturePredictor(nn.Module):
     def forward(self, s_t0, a_t0):
         with torch.no_grad():
             # TODO does setting no_grad stop phi from being affected in SFP backprop?
-            a_t0_onehot = a_t0.to_onehot(dtype=dtypes.float)
+            a_t0_onehot = a_t0.to_onehot(dtype=torch.float).to(device)
             v = torch.cat((self.phi(to_phi_input(s_t0)), a_t0_onehot), 1)
             return self.fc2(self.fc1(v))
 
@@ -208,7 +211,8 @@ class ActionEnvironment():
     def __init__(self, batch):
         self.batch = batch
         # in units of LENS_SIZE
-        self.coords = torch.zeros([len(self.batch), 2], dtype=dtypes.long)
+        self.coords = torch.zeros(
+            [len(self.batch), 2], dtype=torch.long).to(device)
         self.dims = to_tensor(
             [[ceil(im.shape[0]/LENS_SIZE), ceil(im.shape[1]/LENS_SIZE)] for im in self.batch])
         self.update_state()
@@ -219,7 +223,7 @@ class ActionEnvironment():
 
     def update_state(self):
         self.state = to_tensor_f([im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
-                      for im, co in zip(self.batch, self.coords)])
+                                  for im, co in zip(self.batch, self.coords)])
         # overflow results in non square lens
 
     def step(self):
@@ -391,6 +395,8 @@ if __name__ == "__main__":
     cum_loss = 0
     total_guess = 0
     correct_guess = 0
+
+    print('TESTING----------------------------')
 
     with torch.no_grad():
         for batch in test_data_loader:
