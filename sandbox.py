@@ -24,17 +24,20 @@ TEST_SPLIT_PCT = 0.1
 LENS_SIZE = 33
 IMG_COVG_PCT = 1.5
 UPDATE_FREQ = 1000
+NUM_EPOCHS = 3
 
+dtypes = torch.cuda if torch.cuda.is_available() else torch
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def to_phi_input(s):
     return to_tensor_f(s).view(len(s), 3, LENS_SIZE, -1)
 
 
 def to_tensor_f(l):
-    return to_tensor(l, type=torch.FloatTensor)
+    return to_tensor(l, type=dtypes.FloatTensor)
 
 
-def to_tensor(l, type=torch.LongTensor):
+def to_tensor(l, type=dtypes.LongTensor):
     try:
         return type(l)
     except:
@@ -90,17 +93,23 @@ class Resize(object):
 
 
 class SUNDataset(D.Dataset):  # TODO
-    def __init__(self, path, transforms=[], train=True):
-        self.path = path
+    def __init__(self, path=None, transforms=[], train=True, files=None):
         self.transforms = transforms
         # self.files_accessed = set()
-        self.files = sorted([os.path.join(self.path, name) for name in os.listdir(
-            self.path) if os.path.isfile(os.path.join(self.path, name)) and name.endswith('.jpg')])
-        random.shuffle(self.files)
-        if train:
+        if files is None:
+            self.path = path
+            self.files = sorted([os.path.join(self.path, name) for name in os.listdir(
+                self.path) if os.path.isfile(os.path.join(self.path, name)) and name.endswith('.jpg')])
+            random.shuffle(self.files)
             self.files = self.files[:int(len(self.files) * (1-TEST_SPLIT_PCT))]
+            self.other_files = self.files[int(
+                len(self.files) * (1-TEST_SPLIT_PCT)):]
+            if not train:
+                tmp = self.files
+                self.files = self.other_files
+                self.other_files = tmp
         else:
-            self.files = self.files[int(len(self.files) * (1-TEST_SPLIT_PCT)):]
+            self.files = files
 
     def __len__(self):
         return len(self.files)
@@ -176,7 +185,7 @@ class StateFeaturePredictor(nn.Module):
     def forward(self, s_t0, a_t0):
         with torch.no_grad():
             # TODO does setting no_grad stop phi from being affected in SFP backprop?
-            a_t0_onehot = a_t0.to_onehot(dtype=torch.float)
+            a_t0_onehot = a_t0.to_onehot(dtype=dtypes.float)
             v = torch.cat((self.phi(to_phi_input(s_t0)), a_t0_onehot), 1)
             return self.fc2(self.fc1(v))
 
@@ -199,7 +208,7 @@ class ActionEnvironment():
     def __init__(self, batch):
         self.batch = batch
         # in units of LENS_SIZE
-        self.coords = torch.zeros([len(self.batch), 2], dtype=torch.long)
+        self.coords = torch.zeros([len(self.batch), 2], dtype=dtypes.long)
         self.dims = to_tensor(
             [[ceil(im.shape[0]/LENS_SIZE), ceil(im.shape[1]/LENS_SIZE)] for im in self.batch])
         self.update_state()
@@ -209,8 +218,8 @@ class ActionEnvironment():
         self.adjusted_actions = torch.zeros(len(self.batch))
 
     def update_state(self):
-        self.state = [im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
-                      for im, co in zip(self.batch, self.coords)]
+        self.state = to_tensor_f([im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
+                      for im, co in zip(self.batch, self.coords)])
         # overflow results in non square lens
 
     def step(self):
@@ -290,16 +299,11 @@ def init_viz():
 if __name__ == "__main__":
     sun_dataset = SUNDataset(
         path='sun2012/', transforms=[Resize(LENS_SIZE*5), CropToMultiple(LENS_SIZE)])
-    data_loader = D.DataLoader(
-        dataset=sun_dataset,
-        shuffle=True,
-        batch_size=BATCH_SIZE,
-        num_workers=BATCH_SIZE,
-        collate_fn=SUNDataset.collate
-    )
+    test_sun_dataset = SUNDataset(
+        files=sun_dataset.other_files, transforms=sun_dataset.transforms)
 
-    apnet = ActionPredictor()
-    sfpnet = StateFeaturePredictor(apnet.phi)
+    apnet = ActionPredictor().to(device)
+    sfpnet = StateFeaturePredictor(apnet.phi).to(device)
 
     optimizer = torch.optim.Adam(nn.ModuleList(
         [apnet, sfpnet]).parameters(), lr=LEARNING_RATE)
@@ -317,53 +321,116 @@ if __name__ == "__main__":
     ax1, ax2 = init_viz()
 
     cum_loss = 0
-
     total_guess = 0
     correct_guess = 0
 
-    for idx, batch in enumerate(data_loader):
-        # the environment represents the set of images we're currently training on and knows what region of the image we are at
-        env = ActionEnvironment(batch[0])
-        while True:
-            s_t1 = env.state  # get current state of the environment
+    data_loader = D.DataLoader(
+        dataset=sun_dataset,
+        shuffle=True,
+        batch_size=BATCH_SIZE,
+        num_workers=BATCH_SIZE,
+        collate_fn=SUNDataset.collate
+    )
 
-            if s_t0 is not None:
-                a_hat = apnet(s_t0, s_t1)  # inverse module
-                phi_hat = sfpnet(s_t0, a_t0)  # forward module
+    test_data_loader = D.DataLoader(
+        dataset=test_sun_dataset,
+        shuffle=True,
+        batch_size=BATCH_SIZE,
+        num_workers=BATCH_SIZE,
+        collate_fn=SUNDataset.collate
+    )
 
-                # manually keep track of action accuracy - 25% is random guess
-                total_guess += len(batch[0])
-                correct_guess += sum(torch.argmax(a_t0.to_onehot(), dim=1)
-                                     == torch.argmax(a_hat, dim=1)).item()
+    for i in range(NUM_EPOCHS):
+        for idx, batch in enumerate(data_loader):
+            # the environment represents the set of images we're currently training on and knows what region of the image we are at
+            env = ActionEnvironment(batch[0])
+            while True:
+                s_t1 = env.state  # get current state of the environment
 
-                # calculate loss
-                loss = loss_fn(a_hat, a_t0, phi_hat,
-                               apnet.phi(to_phi_input(s_t1)), env.adjusted_actions)
-                # print(ctr, loss.item())
+                if s_t0 is not None:
+                    a_hat = apnet(s_t0, s_t1)  # inverse module
+                    phi_hat = sfpnet(s_t0, a_t0)  # forward module
 
-                # visualize loss
-                cum_loss += loss.item()
-                if ctr > 0 and ctr % UPDATE_FREQ == 0:
-                    visualize_loss(ctr, cum_loss/ctr,
-                                   (correct_guess*100)/total_guess)
-                    print('actions per batch: ' +
-                          str(sum(actions_per_batch)/len(actions_per_batch)))
-                    # visualize_env(s_t0, s_t1, a_t0, a_hat)
+                    # manually keep track of action accuracy - 25% is random guess
+                    total_guess += len(batch[0])
+                    correct_guess += sum(torch.argmax(a_t0.to_onehot(), dim=1)
+                                         == torch.argmax(a_hat, dim=1)).item()
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    # calculate loss
+                    loss = loss_fn(a_hat, a_t0, phi_hat,
+                                   apnet.phi(to_phi_input(s_t1)), env.adjusted_actions)
+                    # print(ctr, loss.item())
 
-            ctr += 1
-            batch_ctr += 1
+                    # visualize loss
+                    cum_loss += loss.item()
+                    if ctr > 0 and ctr % UPDATE_FREQ == 0:
+                        visualize_loss(ctr, cum_loss/ctr,
+                                       (correct_guess*100)/total_guess)
+                        print('actions per batch: ' +
+                              str(sum(actions_per_batch)/len(actions_per_batch)))
+                        # visualize_env(s_t0, s_t1, a_t0, a_hat)
 
-            s_t0 = s_t1
-            env.step()
-            a_t0 = env.last_action
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
-            if env.done:
-                if not PREDICT_NEXT_ACTION:
-                    s_t0 = None
-                    actions_per_batch.append(batch_ctr)
-                    batch_ctr = 0
-                break
+                ctr += 1
+                batch_ctr += 1
+
+                s_t0 = s_t1
+                env.step()
+                a_t0 = env.last_action
+
+                if env.done:
+                    if not PREDICT_NEXT_ACTION:
+                        s_t0 = None
+                        actions_per_batch.append(batch_ctr)
+                        batch_ctr = 0
+                    break
+
+    cum_loss = 0
+    total_guess = 0
+    correct_guess = 0
+
+    with torch.no_grad():
+        for batch in test_data_loader:
+            env = ActionEnvironment(batch[0])
+            while True:
+                s_t1 = env.state  # get current state of the environment
+
+                if s_t0 is not None:
+                    a_hat = apnet(s_t0, s_t1)  # inverse module
+                    phi_hat = sfpnet(s_t0, a_t0)  # forward module
+
+                    # manually keep track of action accuracy - 25% is random guess
+                    total_guess += len(batch[0])
+                    correct_guess += sum(torch.argmax(a_t0.to_onehot(), dim=1)
+                                         == torch.argmax(a_hat, dim=1)).item()
+
+                    # calculate loss
+                    loss = loss_fn(a_hat, a_t0, phi_hat,
+                                   apnet.phi(to_phi_input(s_t1)), env.adjusted_actions)
+                    # print(ctr, loss.item())
+
+                    # visualize loss
+                    cum_loss += loss.item()
+                    if ctr > 0 and ctr % UPDATE_FREQ == 0:
+                        visualize_loss(ctr, cum_loss/ctr,
+                                       (correct_guess*100)/total_guess)
+                        print('actions per batch: ' +
+                              str(sum(actions_per_batch)/len(actions_per_batch)))
+                        # visualize_env(s_t0, s_t1, a_t0, a_hat)
+
+                ctr += 1
+                batch_ctr += 1
+
+                s_t0 = s_t1
+                env.step()
+                a_t0 = env.last_action
+
+                if env.done:
+                    if not PREDICT_NEXT_ACTION:
+                        s_t0 = None
+                        actions_per_batch.append(batch_ctr)
+                        batch_ctr = 0
+                    break
