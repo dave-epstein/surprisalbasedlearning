@@ -353,6 +353,7 @@ if __name__ == "__main__":
     )
 
     for i in range(NUM_EPOCHS):
+        print('starting epoch ', i)
         for idx, batch in enumerate(data_loader):
             # the environment represents the set of images we're currently training on and knows what region of the image we are at
             env = ActionEnvironment(batch[0])
@@ -403,6 +404,8 @@ if __name__ == "__main__":
     cum_loss = 0
     total_guess = 0
     correct_guess = 0
+
+    torch.save(apnet, 'apnet.pt')
 
     print('-TESTING----------------------------')
 
