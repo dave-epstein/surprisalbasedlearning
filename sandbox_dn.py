@@ -153,7 +153,8 @@ class FeatureMapper(nn.Module):
         #         ('elu4', nn.ELU()),
         #     ]
         # ))
-        self.net = DenseNet(growth_rate=12)
+        self.net = DenseNet(growth_rate=12, drop_rate=0.2,
+                            block_config=(2, 4, 8, 6))
         self.out_features = self.net.num_features
 
     def forward(self, x):
@@ -309,7 +310,7 @@ def init_viz():
 
 if __name__ == "__main__":
     sun_dataset = SUNDataset(
-        path='sun2012/', transforms=[Resize(LENS_SIZE*5), CropToMultiple(LENS_SIZE)])
+        path='sun2012/', transforms=[Resize(LENS_SIZE*7), CropToMultiple(LENS_SIZE)])
     test_sun_dataset = SUNDataset(
         files=sun_dataset.other_files, transforms=sun_dataset.transforms)
 
