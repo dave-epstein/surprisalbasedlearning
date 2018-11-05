@@ -15,19 +15,54 @@ import skimage.transform
 from enum import Enum
 from math import ceil
 from densenet import DenseNet
+import argparse
+
+
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+def round_up(n, b):
+    t = n % b
+    if t < 0:
+        t += b
+    if t == 0:
+        return n
+    return n + b - t
+
+
+parser = argparse.ArgumentParser(
+    description='Out of context prediction using surprise-based learning')
+
+parser.add_argument('--batch-size', '-bs', type=int,
+                    help='Set the batch size for learning', default=4)
+parser.add_argument('--visualize', '-x', type=str2bool,
+                    help='Flag for whether matplotlib graphs should be displayed', default=True)
+
+args = parser.parse_args()
+
+
+print(args)
+
 
 PREDICT_NEXT_ACTION = False
 NUM_ACTIONS = 4 + (1 if PREDICT_NEXT_ACTION else 0)
 PHI_SIZE = 32*3*3
 LEARNING_RATE = 1e-3
 BETA = 0
-BATCH_SIZE = 4
-SKIP_DECAY_CONSTANT = 0.8**BATCH_SIZE
+BATCH_SIZE = args.batch_size
+SKIP_DECAY_CONSTANT = (0.8 if BATCH_SIZE < 64 else 0.9)**BATCH_SIZE
 TEST_SPLIT_PCT = 0.1
 LENS_SIZE = 64
-IMG_COVG_PCT = 1.5
-UPDATE_FREQ = 1000
+IMG_COVG_PCT = 1
+UPDATE_FREQ = round_up(1000, BATCH_SIZE)
 NUM_EPOCHS = 100
+VISUALIZE = args.visualize
 
 dtypes = torch.cuda if torch.cuda.is_available() else torch
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -154,7 +189,7 @@ class FeatureMapper(nn.Module):
         #     ]
         # ))
         self.net = DenseNet(growth_rate=12, drop_rate=0.2,
-                            block_config=(2, 4, 8, 6))
+                            block_config=(4, 4))
         self.out_features = self.net.num_features
 
     def forward(self, x):
@@ -243,6 +278,7 @@ class ActionEnvironment():
             underflow_adjustment = to_tensor(self.coords < 0)
             self.adjusted_actions = (
                 overflow_adjustment + underflow_adjustment).sum(dim=1) > 0
+            self.policy.remaining += self.adjusted_actions
             self.coords -= overflow_adjustment
             self.coords += underflow_adjustment
             self.update_state()
@@ -252,7 +288,7 @@ class ActionEnvironment():
 
 def loss_fn(a_hat, a, phi_hat, phi, adj_acts):
     fwd_loss = F.mse_loss(phi_hat, phi)
-    if sum(adj_acts) < len(adj_acts):
+    if sum(to_tensor(adj_acts)) < len(adj_acts):
         inv_loss = F.cross_entropy(
             a_hat[~adj_acts], a.to_onehot()[:len(adj_acts)].argmax(1)[~adj_acts].to(device))
     else:
@@ -276,16 +312,17 @@ def visualize_env(s_t0, s_t1, a_t0, a_hat):
     plt.show()
 
 
-def visualize_loss(ctr, loss, acc):
+def visualize_loss(ctr, loss, acc, viz):
     # adapted with permission from https://matplotlib.org/gallery/api/two_scales.html
     print(ctr, loss, acc)
-    plt_xs.append(ctr)
-    plt_y1s.append(loss)
-    plt_y2s.append(acc)
-    ax1.plot(plt_xs, plt_y1s, color='tab:red')
-    ax2.plot(plt_xs, plt_y2s, color='tab:blue')
-    plt.draw()
-    plt.pause(0.001)
+    if viz:
+        plt_xs.append(ctr)
+        plt_y1s.append(loss)
+        plt_y2s.append(acc)
+        ax1.plot(plt_xs, plt_y1s, color='tab:red')
+        ax2.plot(plt_xs, plt_y2s, color='tab:blue')
+        plt.draw()
+        plt.pause(0.001)
 
 
 def init_viz():
@@ -330,7 +367,9 @@ if __name__ == "__main__":
     plt_xs = []
     plt_y1s = []
     plt_y2s = []
-    ax1, ax2 = init_viz()
+
+    if VISUALIZE:
+        ax1, ax2 = init_viz()
 
     cum_loss = 0
     total_guess = 0
@@ -378,7 +417,7 @@ if __name__ == "__main__":
                     cum_loss += loss.item()
                     if ctr > 0 and ctr % UPDATE_FREQ == 0:
                         visualize_loss(ctr, cum_loss/ctr,
-                                       (correct_guess*100)/total_guess)
+                                       (correct_guess*100)/total_guess, VISUALIZE)
                         print('actions per batch: ' +
                               str(sum(actions_per_batch)/len(actions_per_batch)))
                         # visualize_env(s_t0, s_t1, a_t0, a_hat)

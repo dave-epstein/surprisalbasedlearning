@@ -20,7 +20,7 @@ NUM_ACTIONS = 4 + (1 if PREDICT_NEXT_ACTION else 0)
 PHI_SIZE = 32*3*3
 LEARNING_RATE = 1e-3
 BETA = 0
-BATCH_SIZE = 20
+BATCH_SIZE = 4
 SKIP_DECAY_CONSTANT = 0.8**BATCH_SIZE
 TEST_SPLIT_PCT = 0.1
 LENS_SIZE = 33
@@ -246,7 +246,7 @@ class ActionEnvironment():
 
 def loss_fn(a_hat, a, phi_hat, phi, adj_acts):
     fwd_loss = F.mse_loss(phi_hat, phi)
-    if sum(adj_acts) < len(adj_acts):
+    if sum(to_tensor(adj_acts)) < len(adj_acts):
         inv_loss = F.cross_entropy(
             a_hat[~adj_acts], a.to_onehot()[:len(adj_acts)].argmax(1)[~adj_acts].to(device))
     else:
