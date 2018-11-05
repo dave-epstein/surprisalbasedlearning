@@ -47,7 +47,7 @@ parser.add_argument('--log-freq', '-f', type=int,
                     help='Every how many images we should print an update', default=1000)
 parser.add_argument('--parallel', '-p', type=str2bool,
                     help='Flag for whether batch workers should run in parallel', default=True)
-
+parser.add_argument('--num-workers', '-n', type=int, help='How many workers should we use?', default=-1)
 args = parser.parse_args()
 
 PREDICT_NEXT_ACTION = False
@@ -63,12 +63,20 @@ IMG_COVG_PCT = 1
 UPDATE_FREQ = round_up(args.log_freq, BATCH_SIZE)
 NUM_EPOCHS = 100
 PARALLEL = args.parallel
-NUM_WORKERS = BATCH_SIZE if PARALLEL else 0
+NUM_WORKERS = args.num_workers if PARALLEL else 0
+if NUM_WORKERS < 0 and PARALLEL:
+    NUM_WORKERS = args.batch_size
 VISUALIZE = args.visualize
 
 dtypes = torch.cuda if torch.cuda.is_available() else torch
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+if __name__=="__main__" and torch.cuda.is_available():
+    try:
+        import torch.multiprocessing as multiprocessing
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
 
 def to_phi_input(s):
     return to_tensor_f(s).view(len(s), 3, LENS_SIZE, -1)
@@ -169,10 +177,10 @@ class SUNDataset(D.Dataset):  # TODO
 
     @staticmethod
     def collate(batch):
-        max_dims = to_tensor([_['img'].shape for _ in batch]).max(dim=0)[0]
+        max_dims = to_tensor([_['img'].shape for _ in batch], type=torch.LongTensor).max(dim=0)[0]
         for el in batch:
-            pad = (max_dims - to_tensor(el['dims']))[:-1]
-            el['img'] = F.pad(to_tensor_f(el['img']),
+            pad = (max_dims - to_tensor(el['dims'], type=torch.LongTensor))[:-1]
+            el['img'] = F.pad(to_tensor(el['img'], type=torch.FloatTensor),
                               (0, 0, 0, pad[1].item(), 0, pad[0].item()))
         return D.dataloader.default_collate(batch)
 
@@ -420,7 +428,7 @@ if __name__ == "__main__":
 
                     # manually keep track of action accuracy - 25% is random guess
                     total_guess += len(batch['img'])
-                    correct_guess += sum(torch.argmax(a_t0.to_onehot(), dim=1).to(device)
+                    correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1).to(device)
                                          == torch.argmax(a_hat, dim=1)).item()
 
                     # calculate loss
@@ -433,7 +441,8 @@ if __name__ == "__main__":
                     if ctr > 0 and ctr % UPDATE_FREQ == 0:
                         visualize_loss(ctr, cum_loss/ctr,
                                        (correct_guess*100)/total_guess, VISUALIZE)
-                        print('actions per batch: ' +
+                        if len(actions_per_batch) > 0:
+                            print('actions per batch: ' +
                               str(sum(actions_per_batch)/len(actions_per_batch)))
                         # visualize_env(s_t0, s_t1, a_t0, a_hat)
 
@@ -489,7 +498,8 @@ if __name__ == "__main__":
                     if ctr > 0 and ctr % UPDATE_FREQ == 0:
                         visualize_loss(ctr, cum_loss/ctr,
                                        (correct_guess*100)/total_guess)
-                        print('actions per batch: ' +
+                        if len(actions_per_batch) > 0:
+                            print('actions per batch: ' +
                               str(sum(actions_per_batch)/len(actions_per_batch)))
                         # visualize_env(s_t0, s_t1, a_t0, a_hat)
 
