@@ -276,7 +276,7 @@ class ActionEnvironment():
             underflow_adjustment = to_tensor(self.coords < 0)
             self.adjusted_actions = (
                 overflow_adjustment + underflow_adjustment).sum(dim=1) > 0
-            self.policy.remaining += self.adjusted_actions
+            self.policy.remaining += to_tensor(self.adjusted_actions)
             self.coords -= overflow_adjustment
             self.coords += underflow_adjustment
             self.update_state()
@@ -390,7 +390,7 @@ if __name__ == "__main__":
     )
 
     for i in range(NUM_EPOCHS):
-        print('starting epoch ', i)
+        print('starting epoch', i)
         for idx, batch in enumerate(data_loader):
             # the environment represents the set of images we're currently training on and knows what region of the image we are at
             env = ActionEnvironment(batch[0])
