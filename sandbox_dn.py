@@ -444,7 +444,7 @@ if __name__ == "__main__":
 
                     # visualize loss
                     cum_loss += loss.item()
-                    if ctr > 0 and ctr % UPDATE_FREQ == 0:
+                    if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
                         visualize_loss(ctr, cum_loss/ctr,
                                        (correct_guess*100)/total_guess, VISUALIZE)
                         if len(actions_per_batch) > 0:
@@ -472,6 +472,7 @@ if __name__ == "__main__":
 
         if correct_guess/total_guess > best_acc:
             best_acc = correct_guess/total_guess
+            print('new best accuracy', i, (correct_guess*100)/total_guess)
             torch.save(apnet, 'apnet{0}.pt'.format(i))
 
     cum_loss = 0
