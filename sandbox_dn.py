@@ -45,6 +45,8 @@ parser.add_argument('--visualize', '-x', type=str2bool,
                     help='Flag for whether matplotlib graphs should be displayed', default=True)
 parser.add_argument('--log-freq', '-f', type=int,
                     help='Every how many images we should print an update', default=1000)
+parser.add_argument('--parallel', '-p', type=str2bool,
+                    help='Flag for whether batch workers should run in parallel', default=True)
 
 args = parser.parse_args()
 
@@ -60,7 +62,7 @@ LENS_SIZE = 64
 IMG_COVG_PCT = 1
 UPDATE_FREQ = round_up(args.log_freq, BATCH_SIZE)
 NUM_EPOCHS = 100
-PARALLEL = True
+PARALLEL = args.parallel
 NUM_WORKERS = BATCH_SIZE if PARALLEL else 0
 VISUALIZE = args.visualize
 
