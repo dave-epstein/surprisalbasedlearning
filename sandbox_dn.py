@@ -47,7 +47,8 @@ parser.add_argument('--log-freq', '-f', type=int,
                     help='Every how many images we should print an update', default=1000)
 parser.add_argument('--parallel', '-p', type=str2bool,
                     help='Flag for whether batch workers should run in parallel', default=True)
-parser.add_argument('--num-workers', '-n', type=int, help='How many workers should we use?', default=-1)
+parser.add_argument('--num-workers', '-n', type=int,
+                    help='How many workers should we use?', default=-1)
 args = parser.parse_args()
 
 PREDICT_NEXT_ACTION = False
@@ -71,12 +72,13 @@ VISUALIZE = args.visualize
 dtypes = torch.cuda if torch.cuda.is_available() else torch
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-if __name__=="__main__" and torch.cuda.is_available():
+if __name__ == "__main__" and torch.cuda.is_available():
     try:
         import torch.multiprocessing as multiprocessing
         multiprocessing.set_start_method('spawn', force=True)
     except RuntimeError:
         pass
+
 
 def to_phi_input(s):
     return to_tensor_f(s).view(len(s), 3, LENS_SIZE, -1)
@@ -177,9 +179,11 @@ class SUNDataset(D.Dataset):  # TODO
 
     @staticmethod
     def collate(batch):
-        max_dims = to_tensor([_['img'].shape for _ in batch], type=torch.LongTensor).max(dim=0)[0]
+        max_dims = to_tensor([_['img'].shape for _ in batch],
+                             type=torch.LongTensor).max(dim=0)[0]
         for el in batch:
-            pad = (max_dims - to_tensor(el['dims'], type=torch.LongTensor))[:-1]
+            pad = (max_dims - to_tensor(el['dims'],
+                                        type=torch.LongTensor))[:-1]
             el['img'] = F.pad(to_tensor(el['img'], type=torch.FloatTensor),
                               (0, 0, 0, pad[1].item(), 0, pad[0].item()))
         return D.dataloader.default_collate(batch)
@@ -413,6 +417,8 @@ if __name__ == "__main__":
         collate_fn=SUNDataset.collate
     )
 
+    best_acc = 0
+
     for i in range(NUM_EPOCHS):
         print('starting epoch', i)
         for idx, batch in enumerate(data_loader):
@@ -443,7 +449,7 @@ if __name__ == "__main__":
                                        (correct_guess*100)/total_guess, VISUALIZE)
                         if len(actions_per_batch) > 0:
                             print('actions per batch: ' +
-                              str(sum(actions_per_batch)/len(actions_per_batch)))
+                                  str(sum(actions_per_batch)/len(actions_per_batch)))
                         # visualize_env(s_t0, s_t1, a_t0, a_hat)
 
                     optimizer.zero_grad()
@@ -463,6 +469,10 @@ if __name__ == "__main__":
                         actions_per_batch.append(batch_ctr)
                         batch_ctr = 0
                     break
+
+        if correct_guess/total_guess > best_acc:
+            best_acc = correct_guess/total_guess
+            torch.save(apnet, 'apnet{0}.pt'.format(i))
 
     cum_loss = 0
     total_guess = 0
@@ -500,7 +510,7 @@ if __name__ == "__main__":
                                        (correct_guess*100)/total_guess)
                         if len(actions_per_batch) > 0:
                             print('actions per batch: ' +
-                              str(sum(actions_per_batch)/len(actions_per_batch)))
+                                  str(sum(actions_per_batch)/len(actions_per_batch)))
                         # visualize_env(s_t0, s_t1, a_t0, a_hat)
 
                 ctr += 1
