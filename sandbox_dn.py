@@ -43,12 +43,10 @@ parser.add_argument('--batch-size', '-bs', type=int,
                     help='Set the batch size for learning', default=4)
 parser.add_argument('--visualize', '-x', type=str2bool,
                     help='Flag for whether matplotlib graphs should be displayed', default=True)
+parser.add_argument('--log-freq', '-f', type=int,
+                    help='Every how many images we should print an update', default=1000)
 
 args = parser.parse_args()
-
-
-print(args)
-
 
 PREDICT_NEXT_ACTION = False
 NUM_ACTIONS = 4 + (1 if PREDICT_NEXT_ACTION else 0)
@@ -60,7 +58,7 @@ SKIP_DECAY_CONSTANT = (0.8 if BATCH_SIZE < 64 else 0.9)**BATCH_SIZE
 TEST_SPLIT_PCT = 0.1
 LENS_SIZE = 64
 IMG_COVG_PCT = 1
-UPDATE_FREQ = round_up(1000, BATCH_SIZE)
+UPDATE_FREQ = round_up(args.log_freq, BATCH_SIZE)
 NUM_EPOCHS = 100
 VISUALIZE = args.visualize
 
