@@ -52,7 +52,7 @@ PREDICT_NEXT_ACTION = False
 NUM_ACTIONS = 4 + (1 if PREDICT_NEXT_ACTION else 0)
 PHI_SIZE = 32*3*3
 LEARNING_RATE = 1e-3
-BETA = 0
+BETA = 0.2
 BATCH_SIZE = args.batch_size
 SKIP_DECAY_CONSTANT = (0.8 if BATCH_SIZE < 64 else 0.9)**BATCH_SIZE
 TEST_SPLIT_PCT = 0.1
@@ -60,6 +60,8 @@ LENS_SIZE = 64
 IMG_COVG_PCT = 1
 UPDATE_FREQ = round_up(args.log_freq, BATCH_SIZE)
 NUM_EPOCHS = 100
+PARALLEL = True
+NUM_WORKERS = BATCH_SIZE if PARALLEL else 0
 VISUALIZE = args.visualize
 
 dtypes = torch.cuda if torch.cuda.is_available() else torch
@@ -101,7 +103,7 @@ class CropToMultiple(object):
     def __init__(self, m):
         self.m = m
 
-    def __call__(self, image, fn):
+    def __call__(self, image, file):
         h, w = image.shape[:2]
         return image[:((h//self.m)*self.m), :((w//self.m)*self.m)]
 
@@ -113,7 +115,7 @@ class Resize(object):
         assert isinstance(output_size, (int, tuple))
         self.output_size = output_size
 
-    def __call__(self, image, fn):
+    def __call__(self, image, file):
         h, w = image.shape[:2]
         if isinstance(self.output_size, int):
             if h > w:
@@ -126,7 +128,7 @@ class Resize(object):
         try:
             return skimage.transform.resize(image, (new_h, new_w))[:, :, :3]
         except Exception as e:
-            print('THE CULPRIT IS ' + fn)
+            print('THE CULPRIT IS ' + file)
 
 
 class SUNDataset(D.Dataset):  # TODO
@@ -156,7 +158,7 @@ class SUNDataset(D.Dataset):  # TODO
         img = skimage.io.imread(self.files[i])
         for t in self.transforms:
             img = t(img, self.files[i])
-        return img, self.files[i]
+        return {'img': img, 'file': self.files[i], 'dims': img.shape}
 
     def display_image(self, i):
         plt.figure()
@@ -165,7 +167,12 @@ class SUNDataset(D.Dataset):  # TODO
 
     @staticmethod
     def collate(batch):
-        return list(zip(*batch))
+        max_dims = to_tensor([_['img'].shape for _ in batch]).max(dim=0)[0]
+        for el in batch:
+            pad = (max_dims - to_tensor(el['dims']))[:-1]
+            el['img'] = F.pad(to_tensor_f(el['img']),
+                              (0, 0, 0, pad[1].item(), 0, pad[0].item()))
+        return D.dataloader.default_collate(batch)
 
     # def done(self):
     #     return len(self.files_accessed) == len(self)
@@ -263,7 +270,7 @@ class ActionEnvironment():
         self.adjusted_actions = torch.zeros(len(self.batch))
 
     def update_state(self):
-        self.state = to_tensor_f([im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
+        self.state = torch.stack([im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
                                   for im, co in zip(self.batch, self.coords)])
         # overflow results in non square lens
 
@@ -343,6 +350,13 @@ def init_viz():
     return ax1, ax2
 
 
+def preprocess_batch(batch):
+    batch['dims'] = torch.stack(batch['dims']).t()
+    batch['img'] = [_[[slice(__.item()) for __ in batch['dims'][i]]]
+                    for i, _ in enumerate(batch['img'])]
+    return batch
+
+
 if __name__ == "__main__":
     sun_dataset = SUNDataset(
         path='sun2012/', transforms=[Resize(LENS_SIZE*7), CropToMultiple(LENS_SIZE)])
@@ -377,7 +391,7 @@ if __name__ == "__main__":
         dataset=sun_dataset,
         shuffle=True,
         batch_size=BATCH_SIZE,
-        num_workers=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
         collate_fn=SUNDataset.collate
     )
 
@@ -385,15 +399,16 @@ if __name__ == "__main__":
         dataset=test_sun_dataset,
         shuffle=True,
         batch_size=BATCH_SIZE,
-        num_workers=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
         collate_fn=SUNDataset.collate
     )
 
     for i in range(NUM_EPOCHS):
         print('starting epoch', i)
         for idx, batch in enumerate(data_loader):
+            batch = preprocess_batch(batch)
             # the environment represents the set of images we're currently training on and knows what region of the image we are at
-            env = ActionEnvironment(batch[0])
+            env = ActionEnvironment(batch['img'])
             while True:
                 s_t1 = env.state  # get current state of the environment
 
@@ -402,7 +417,7 @@ if __name__ == "__main__":
                     phi_hat = sfpnet(s_t0, a_t0)  # forward module
 
                     # manually keep track of action accuracy - 25% is random guess
-                    total_guess += len(batch[0])
+                    total_guess += len(batch['img'])
                     correct_guess += sum(torch.argmax(a_t0.to_onehot(), dim=1).to(device)
                                          == torch.argmax(a_hat, dim=1)).item()
 
@@ -448,7 +463,8 @@ if __name__ == "__main__":
 
     with torch.no_grad():
         for batch in test_data_loader:
-            env = ActionEnvironment(batch[0])
+            batch = preprocess_batch(batch)
+            env = ActionEnvironment(batch['img'])
             while True:
                 s_t1 = env.state  # get current state of the environment
 
@@ -457,7 +473,7 @@ if __name__ == "__main__":
                     phi_hat = sfpnet(s_t0, a_t0)  # forward module
 
                     # manually keep track of action accuracy - 25% is random guess
-                    total_guess += len(batch[0])
+                    total_guess += len(batch['img'])
                     correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1)
                                          == torch.argmax(a_hat, dim=1)).item()
 

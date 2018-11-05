@@ -334,7 +334,7 @@ if __name__ == "__main__":
         dataset=sun_dataset,
         shuffle=True,
         batch_size=BATCH_SIZE,
-        num_workers=BATCH_SIZE,
+        num_workers=0,
         collate_fn=SUNDataset.collate
     )
 
