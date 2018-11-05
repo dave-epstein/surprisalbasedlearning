@@ -14,16 +14,17 @@ import skimage.io
 import skimage.transform
 from enum import Enum
 from math import ceil
+from densenet import DenseNet
 
 PREDICT_NEXT_ACTION = False
 NUM_ACTIONS = 4 + (1 if PREDICT_NEXT_ACTION else 0)
 PHI_SIZE = 32*3*3
 LEARNING_RATE = 1e-3
 BETA = 0
-BATCH_SIZE = 20
+BATCH_SIZE = 4
 SKIP_DECAY_CONSTANT = 0.8**BATCH_SIZE
 TEST_SPLIT_PCT = 0.1
-LENS_SIZE = 33
+LENS_SIZE = 64
 IMG_COVG_PCT = 1.5
 UPDATE_FREQ = 1000
 NUM_EPOCHS = 100
@@ -140,21 +141,24 @@ class SUNDataset(D.Dataset):  # TODO
 class FeatureMapper(nn.Module):
     def __init__(self):
         super().__init__()
-        self.net = nn.Sequential(OrderedDict(
-            [
-                ('conv1', nn.Conv2d(3, 32, 3, stride=2, padding=1)),
-                ('elu1', nn.ELU()),
-                ('conv2', nn.Conv2d(32, 32, 3, stride=2, padding=1)),
-                ('elu2', nn.ELU()),
-                ('conv3', nn.Conv2d(32, 32, 3, stride=2, padding=1)),
-                ('elu3', nn.ELU()),
-                ('conv4', nn.Conv2d(32, 32, 3, stride=2, padding=1)),
-                ('elu4', nn.ELU()),
-            ]
-        ))
+        # self.net = nn.Sequential(OrderedDict(
+        #     [
+        #         ('conv1', nn.Conv2d(3, 32, 3, stride=2, padding=1)),
+        #         ('elu1', nn.ELU()),
+        #         ('conv2', nn.Conv2d(32, 32, 3, stride=2, padding=1)),
+        #         ('elu2', nn.ELU()),
+        #         ('conv3', nn.Conv2d(32, 32, 3, stride=2, padding=1)),
+        #         ('elu3', nn.ELU()),
+        #         ('conv4', nn.Conv2d(32, 32, 3, stride=2, padding=1)),
+        #         ('elu4', nn.ELU()),
+        #     ]
+        # ))
+        self.net = DenseNet(growth_rate=12)
+        self.out_features = self.net.num_features
 
     def forward(self, x):
-        return self.flatten(self.net(x))
+        # return self.flatten(self.net(x))
+        return self.net(x)
 
     def flatten(self, x):
         size = x.size()[1:]  # all dimensions except the batch dimension
@@ -169,7 +173,8 @@ class ActionPredictor(nn.Module):
         super().__init__()
         self.phi = FeatureMapper()
         # the embeddings of s_t and s_{t+1} are concatenated. each embedding has dimension 32*3*3=288
-        self.fc1 = nn.Linear(2*PHI_SIZE, 256)
+        # self.fc1 = nn.Linear(2*PHI_SIZE, 256)
+        self.fc1 = nn.Linear(self.phi.out_features*2, 256)
         self.fc2 = nn.Linear(256, NUM_ACTIONS)
 
     def forward(self, s_t0, s_t1):
@@ -181,9 +186,9 @@ class ActionPredictor(nn.Module):
 class StateFeaturePredictor(nn.Module):
     def __init__(self, phi):
         super().__init__()
-        self.fc1 = nn.Linear(PHI_SIZE+NUM_ACTIONS, 256)
-        self.fc2 = nn.Linear(256, PHI_SIZE)
         self.phi = phi
+        self.fc1 = nn.Linear(self.phi.out_features+NUM_ACTIONS, 256)
+        self.fc2 = nn.Linear(256, self.phi.out_features)
 
     def forward(self, s_t0, a_t0):
         with torch.no_grad():

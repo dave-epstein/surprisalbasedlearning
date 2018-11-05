@@ -3,3 +3,4 @@ venv
 .mypy_cache
 .vscode
 env
+__pycache__/densenet.cpython-37.pyc
