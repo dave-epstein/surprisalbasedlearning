@@ -159,7 +159,7 @@ class Resize(object):
             new_h, new_w = self.output_size
         new_h, new_w = int(new_h), int(new_w)
         try:
-            return skimage.transform.resize(image, (new_h, new_w))[:, :, :3]
+            return skimage.transform.resize(image, (new_h, new_w), anti_aliasing=True, mode='constant')[:, :, :3]
         except Exception as e:
             print('THE CULPRIT IS ' + file)
 
@@ -304,7 +304,7 @@ class ActionEnvironment():
         self.last_action = None
         self.adjusted_actions = torch.zeros(len(self.batch))
         self.storage = [torch.zeros(tuple(_)).to(device) for _ in self.dims]
-        self.deterministic_actions = spiral_actions(*self.dims.max(dim=0))
+        self.deterministic_actions = spiral_actions(*self.dims.max(dim=0)[0])
 
     def update_state(self):
         self.state = torch.stack([im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
@@ -315,11 +315,12 @@ class ActionEnvironment():
         # data is of shape [len(self.batch)], is stored at the coordinate of each image
         for datum, cell, coord, adj in zip(data, self.storage, self.coords, self.adjusted_actions):
             if store_adjusted or not adj:
-                cell[coord] = datum
+                cell[tuple(coord)] = datum
 
     def step(self, deterministic=False):
         if deterministic:
-            self.last_action = self.deterministic_actions.pop(0)
+            self.last_action = self.deterministic_actions.pop(0) if len(
+                self.deterministic_actions) > 0 else Action.NEXT
         else:
             self.last_action = self.policy.act()
         if self.last_action != Action.NEXT:
@@ -414,6 +415,22 @@ if __name__ == "__main__":
     apnet = ActionPredictor().to(device)
     sfpnet = StateFeaturePredictor(apnet.phi).to(device)
 
+    data_loader = D.DataLoader(
+        dataset=sun_dataset,
+        shuffle=True,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        collate_fn=SUNDataset.collate
+    )
+
+    test_data_loader = D.DataLoader(
+        dataset=test_sun_dataset,
+        shuffle=True,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        collate_fn=SUNDataset.collate
+    )
+
     if not args.test_only:
         optimizer = torch.optim.Adam(nn.ModuleList(
             [apnet, sfpnet]).parameters(), lr=LEARNING_RATE)
@@ -435,22 +452,6 @@ if __name__ == "__main__":
         cum_loss = 0
         total_guess = 0
         correct_guess = 0
-
-        data_loader = D.DataLoader(
-            dataset=sun_dataset,
-            shuffle=True,
-            batch_size=BATCH_SIZE,
-            num_workers=NUM_WORKERS,
-            collate_fn=SUNDataset.collate
-        )
-
-        test_data_loader = D.DataLoader(
-            dataset=test_sun_dataset,
-            shuffle=True,
-            batch_size=BATCH_SIZE,
-            num_workers=NUM_WORKERS,
-            collate_fn=SUNDataset.collate
-        )
 
         best_acc = 0
 
@@ -522,55 +523,43 @@ if __name__ == "__main__":
         # torch.save(apnet, 'apnet-final.pt')
     else:
         model_names = args.model_names.split(',')
-        apnet.load_state_dict(torch.load(model_names[0]))
-        sfpnet.load_state_dict(torch.load(model_names[1]))
+        apnet.load_state_dict(torch.load(model_names[0], map_location=device))
+        sfpnet.load_state_dict(torch.load(model_names[1], map_location=device))
 
     if not args.train_only:
         with torch.no_grad():
-            # print('TESTING ACTION RECOGNITION ACCURACY')
-            # for batch in test_data_loader:
-            #     batch = preprocess_batch(batch)
-            #     env = ActionEnvironment(batch['img'])
-            #     while True:
-            #         s_t1 = env.state  # get current state of the environment
+            s_t0, a_t0, s_t1 = None, None, None
+            test_total_guess, test_correct_guess, ctr = 0, 0, 0
+            print('TESTING ACTION RECOGNITION ACCURACY')
+            for batch in test_data_loader:
+                batch = preprocess_batch(batch)
+                env = ActionEnvironment(batch['img'])
+                while True:
+                    s_t1 = env.state  # get current state of the environment
 
-            #         if s_t0 is not None:
-            #             a_hat = apnet(s_t0, s_t1)  # inverse module
-            #             # phi_hat = sfpnet(s_t0, a_t0)  # forward module
+                    if s_t0 is not None:
+                        a_hat = apnet(s_t0, s_t1)  # inverse module
+                        test_total_guess += len(batch['img'])
+                        test_correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1)
+                                                  == torch.argmax(a_hat, dim=1)).item()
 
-            #             # manually keep track of action accuracy - 25% is random guess
-            #             total_guess += len(batch['img'])
-            #             correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1)
-            #                                  == torch.argmax(a_hat, dim=1)).item()
+                        if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
+                            print('cumul accuracy', round(
+                                (test_correct_guess*100)/test_total_guess, 2))
 
-            #             # calculate loss
-            #             loss = loss_fn(a_hat, a_t0, phi_hat,
-            #                            apnet.phi(to_phi_input(s_t1)), env.adjusted_actions)
-            #             # print(ctr, loss.item())
+                    ctr += BATCH_SIZE
 
-            #             # visualize loss
-            #             cum_loss += loss.item()
-            #             if ctr > 0 and ctr % UPDATE_FREQ == 0 and UPDATE_FREQ > 0:
-            #                 visualize_loss(ctr, cum_loss/ctr,
-            #                                (correct_guess*100)/total_guess, VISUALIZE)
-            #                 if len(actions_per_batch) > 0:
-            #                     print('actions per batch: ' +
-            #                           str(sum(actions_per_batch)/len(actions_per_batch)))
-            #                 # visualize_env(s_t0, s_t1, a_t0, a_hat)
+                    s_t0 = s_t1
+                    env.step()
+                    a_t0 = env.last_action
 
-            #         ctr += 1
-            #         batch_ctr += 1
+                    if env.done:
+                        if not PREDICT_NEXT_ACTION:
+                            s_t0 = None
+                        break
 
-            #         s_t0 = s_t1
-            #         env.step()
-            #         a_t0 = env.last_action
-
-            #         if env.done:
-            #             if not PREDICT_NEXT_ACTION:
-            #                 s_t0 = None
-            #                 actions_per_batch.append(batch_ctr)
-            #                 batch_ctr = 0
-            #             break
+            print('final accuracy', round(
+                (test_correct_guess*100)/test_total_guess, 2))
 
             ooc_data_loader = D.DataLoader(
                 dataset=ooc_sun_dataset,
@@ -581,7 +570,7 @@ if __name__ == "__main__":
             )
 
             results = []
-
+            print('TESTING SURPRISAL INFORMATION')
             for batch in ooc_data_loader:
                 batch = preprocess_batch(batch)
                 env = ActionEnvironment(batch['img'])
@@ -591,7 +580,7 @@ if __name__ == "__main__":
                     if s_t0 is not None:
                         phi_hat = sfpnet(s_t0, a_t0)  # forward module
                         surprise = F.mse_loss(
-                            phi_hat, apnet.phi(to_phi_input(s_t1)))
+                            phi_hat, apnet.phi(to_phi_input(s_t1)), reduction='none').sum(dim=1)
                         env.store(surprise)
 
                     s_t0 = s_t1
@@ -603,3 +592,6 @@ if __name__ == "__main__":
                             s_t0 = None
                         break
                 results.append((batch['file'], env.storage))
+
+            # TODO visualize
+            print(results)
