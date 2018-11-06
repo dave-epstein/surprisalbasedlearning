@@ -122,15 +122,19 @@ class Action(Enum):
     RIGHT = [0, 1]
     DOWN = [1, 0]
     LEFT = [0, -1]
-    NEXT = None
+    NEXT = [0, 0]
 
     def to_onehot(self, dtype=torch.long):
-        onehot = torch.zeros([BATCH_SIZE, NUM_ACTIONS], dtype=dtype)
+        onehot = torch.zeros([NUM_ACTIONS], dtype=dtype)
         # note that this assumes same action for all training points in minibatch
         for i, a in enumerate(Action):
-            if self == list(Action)[i]:
-                onehot[:, i] = 1
+            if self == a:
+                onehot[i] = 1
         return onehot
+
+
+def actions_to_onehot(a_list, dtype=torch.long):
+    return torch.stack([a.to_onehot(dtype=dtype) for a in a_list]).to(device)
 
 
 class CropToMultiple(object):
@@ -271,8 +275,7 @@ class StateFeaturePredictor(nn.Module):
         with torch.no_grad():
             # TODO does setting no_grad stop phi from being affected in SFP backprop?
             phi_s_t0 = self.phi(to_phi_input(s_t0))
-            a_t0_onehot = a_t0.to_onehot(dtype=torch.float).to(device)[
-                :phi_s_t0.shape[0]]
+            a_t0_onehot = actions_to_onehot(a_t0, dtype=torch.float)
             v = torch.cat((phi_s_t0, a_t0_onehot), 1)
         return self.fc2(self.fc1(v))
 
@@ -285,14 +288,15 @@ class ActionPolicy():
     def act(self):
         for r in self.remaining:
             if SKIP_DECAY_CONSTANT**(r.item()/2) >= random.random():
-                return Action.NEXT
+                return [Action.NEXT for _ in self.remaining]
         self.remaining -= 1
-        return random.choice(list(Action)[:-1])
+        act = random.choice(list(Action)[:-1])
+        return [act for _ in self.remaining]
         # return list(Action)[1]
 
 
 class ActionEnvironment():
-    def __init__(self, batch):
+    def __init__(self, batch, deterministic=False):
         self.batch = batch
         # in units of LENS_SIZE
         self.coords = torch.zeros(
@@ -305,7 +309,9 @@ class ActionEnvironment():
         self.last_action = None
         self.adjusted_actions = torch.zeros(len(self.batch))
         self.storage = [torch.zeros(tuple(_)).to(device) for _ in self.dims]
-        self.deterministic_actions = spiral_actions(*self.dims.max(dim=0)[0])
+        self.deterministic = deterministic
+        self.deterministic_actions = [
+            spiral_actions(*tuple(_)) for _ in self.dims]
 
     def update_state(self):
         self.state = torch.stack([im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
@@ -318,32 +324,39 @@ class ActionEnvironment():
             if store_adjusted or not adj:
                 cell[tuple(coord)] = datum
 
-    def step(self, deterministic=False):
-        if deterministic:
-            self.last_action = self.deterministic_actions.pop(0) if len(
-                self.deterministic_actions) > 0 else Action.NEXT
+    def step(self):
+        if self.deterministic:
+            self.last_action = [_.pop(0) if len(
+                _) > 0 else Action.NEXT for _ in self.deterministic_actions]
+            if Action.NEXT not in self.last_action:
+                self.coords += to_tensor([_.value for _ in self.last_action])
+                self.adjusted_actions = torch.ByteTensor([
+                    _ == Action.NEXT for _ in self.last_action]).to(device)
+            else:
+                self.last_action = [Action.NEXT for _ in self.batch]
+                self.done = True
         else:
             self.last_action = self.policy.act()
-        if self.last_action != Action.NEXT:
-            self.coords += to_tensor(self.last_action.value)
-            # in case of dimension out of bounds, stay at boundary (i.e. take no action)
-            overflow_adjustment = to_tensor(self.coords == self.dims)
-            underflow_adjustment = to_tensor(self.coords < 0)
-            self.adjusted_actions = (
-                overflow_adjustment + underflow_adjustment).sum(dim=1) > 0
-            self.policy.remaining += to_tensor(self.adjusted_actions)
-            self.coords -= overflow_adjustment
-            self.coords += underflow_adjustment
-            self.update_state()
-        else:
-            self.done = True
+            if self.last_action[0] != Action.NEXT:
+                self.coords += to_tensor([_.value for _ in self.last_action])
+                # in case of dimension out of bounds, stay at boundary (i.e. take no action)
+                overflow_adjustment = to_tensor(self.coords == self.dims)
+                underflow_adjustment = to_tensor(self.coords < 0)
+                self.adjusted_actions = (
+                    overflow_adjustment + underflow_adjustment).sum(dim=1) > 0
+                self.policy.remaining += to_tensor(self.adjusted_actions)
+                self.coords -= overflow_adjustment
+                self.coords += underflow_adjustment
+                self.update_state()
+            else:
+                self.done = True
 
 
 def loss_fn(a_hat, a, phi_hat, phi, adj_acts):
     fwd_loss = F.mse_loss(phi_hat, phi)
     if sum(to_tensor(adj_acts)) < len(adj_acts):
         inv_loss = F.cross_entropy(
-            a_hat[~adj_acts], a.to_onehot()[:len(adj_acts)].argmax(1)[~adj_acts].to(device))
+            a_hat[~adj_acts], actions_to_onehot(a).argmax(1)[~adj_acts].to(device))
     else:
         inv_loss = 0
     return BETA*fwd_loss + (1-BETA)*inv_loss
@@ -471,7 +484,7 @@ if __name__ == "__main__":
 
                         # manually keep track of action accuracy - 25% is random guess
                         total_guess += len(batch['img'])
-                        correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1).to(device)
+                        correct_guess += sum(torch.argmax(actions_to_onehot(a_t0), dim=1)
                                              == torch.argmax(a_hat, dim=1)).item()
 
                         # calculate loss
@@ -534,14 +547,14 @@ if __name__ == "__main__":
             print('TESTING ACTION RECOGNITION ACCURACY')
             for batch in test_data_loader:
                 batch = preprocess_batch(batch)
-                env = ActionEnvironment(batch['img'])
+                env = ActionEnvironment(batch['img'], deterministic=True)
                 while True:
                     s_t1 = env.state  # get current state of the environment
 
                     if s_t0 is not None:
                         a_hat = apnet(s_t0, s_t1)  # inverse module
                         test_total_guess += len(batch['img'])
-                        test_correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1).to(device)
+                        test_correct_guess += sum(torch.argmax(actions_to_onehot(a_t0), dim=1)
                                                   == torch.argmax(a_hat, dim=1)).item()
 
                         if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
@@ -585,7 +598,7 @@ if __name__ == "__main__":
                         env.store(surprise)
 
                     s_t0 = s_t1
-                    env.step(deterministic=True)
+                    env.step()
                     a_t0 = env.last_action
 
                     if env.done:
