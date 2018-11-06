@@ -189,7 +189,7 @@ class SUNDataset(D.Dataset):  # TODO
 
     def __getitem__(self, i):
         # self.files_accessed.add(self.files[i])
-        img = skimage.io.imread(self.files[i])
+        img = skimage.io.imread(self.files[i], img_num=0)
         for t in self.transforms:
             img = t(img, self.files[i])
         return {'img': img, 'file': self.files[i], 'dims': img.shape}
