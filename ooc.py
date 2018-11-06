@@ -70,6 +70,8 @@ parser.add_argument('--train-only', '-r', type=str2bool,
                     help='Run only train?', default=False)
 parser.add_argument('--model-names', '-m',
                     help='Enter the names of the model files to load separated by commas (default is "apnet.pt, sfpnet.pt")', default='apnet.pt,sfpnet.pt')
+parser.add_argument(
+    '--gpu-id', '-g', help='Enter the ID of the CUDA-enabled GPU to run on, if one exists (enter -1 to force CPU)', default=0, type=int)
 args = parser.parse_args()
 
 PREDICT_NEXT_ACTION = False
@@ -91,7 +93,8 @@ if NUM_WORKERS < 0 and PARALLEL:
 VISUALIZE = args.visualize
 
 dtypes = torch.cuda if torch.cuda.is_available() else torch
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:{0}".format(
+    args.gpu_id) if torch.cuda.is_available() and args.gpu_id > -1 else "cpu")
 
 if __name__ == "__main__" and torch.cuda.is_available():
     try:
