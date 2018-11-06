@@ -473,7 +473,8 @@ if __name__ == "__main__":
         if correct_guess/total_guess > best_acc:
             best_acc = correct_guess/total_guess
             print('new best accuracy', i, (correct_guess*100)/total_guess)
-            torch.save(apnet, 'apnet{0}.pt'.format(i))
+            
+        torch.save(apnet, 'apnet{0}-acc{1}.pt'.format(i, round((correct_guess*100)/total_guess, 2)))
 
     cum_loss = 0
     total_guess = 0
