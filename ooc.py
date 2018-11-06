@@ -310,8 +310,9 @@ class ActionEnvironment():
         self.adjusted_actions = torch.zeros(len(self.batch))
         self.storage = [torch.zeros(tuple(_)).to(device) for _ in self.dims]
         self.deterministic = deterministic
-        self.deterministic_actions = [
-            spiral_actions(*tuple(_)) for _ in self.dims]
+        if deterministic:
+            self.deterministic_actions = [
+                spiral_actions(*tuple(_)) for _ in self.dims]
 
     def update_state(self):
         self.state = torch.stack([im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
