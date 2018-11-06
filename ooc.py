@@ -36,6 +36,21 @@ def round_up(n, b):
     return n + b - t
 
 
+def spiral_actions(Y, X):
+    r = []
+    d = [Action.LEFT, Action.UP, None, Action.DOWN, Action.RIGHT]
+    x = y = 0
+    dx = 0
+    dy = -1
+    for i in range(max(X, Y)**2):
+        if (-X/2 < x <= X/2) and (-Y/2 < y <= Y/2):
+            r.append(d[2*dx + dy + 2])
+        if x == y or (x < 0 and x == -y) or (x > 0 and x == 1-y):
+            dx, dy = -dy, dx
+        x, y = x+dx, y+dy
+    return r[1:]
+
+
 parser = argparse.ArgumentParser(
     description='Out of context prediction using surprise-based learning')
 
@@ -288,14 +303,25 @@ class ActionEnvironment():
         self.done = False
         self.last_action = None
         self.adjusted_actions = torch.zeros(len(self.batch))
+        self.storage = [torch.zeros(tuple(_)).to(device) for _ in self.dims]
+        self.deterministic_actions = spiral_actions(*self.dims.max(dim=0))
 
     def update_state(self):
         self.state = torch.stack([im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
                                   for im, co in zip(self.batch, self.coords)])
         # overflow results in non square lens
 
-    def step(self):
-        self.last_action = self.policy.act()
+    def store(self, data, store_adjusted=False):
+        # data is of shape [len(self.batch)], is stored at the coordinate of each image
+        for datum, cell, coord, adj in zip(data, self.storage, self.coords, self.adjusted_actions):
+            if store_adjusted or not adj:
+                cell[coord] = datum
+
+    def step(self, deterministic=False):
+        if deterministic:
+            self.last_action = self.deterministic_actions.pop(0)
+        else:
+            self.last_action = self.policy.act()
         if self.last_action != Action.NEXT:
             self.coords += to_tensor(self.last_action.value)
             # in case of dimension out of bounds, stay at boundary (i.e. take no action)
@@ -554,9 +580,10 @@ if __name__ == "__main__":
                 collate_fn=SUNDataset.collate
             )
 
+            results = []
+
             for batch in ooc_data_loader:
                 batch = preprocess_batch(batch)
-                # for i in range(4):
                 env = ActionEnvironment(batch['img'])
                 while True:
                     s_t1 = env.state  # get current state of the environment
@@ -565,12 +592,14 @@ if __name__ == "__main__":
                         phi_hat = sfpnet(s_t0, a_t0)  # forward module
                         surprise = F.mse_loss(
                             phi_hat, apnet.phi(to_phi_input(s_t1)))
+                        env.store(surprise)
 
                     s_t0 = s_t1
-                    env.step()
+                    env.step(deterministic=True)
                     a_t0 = env.last_action
 
                     if env.done:
                         if not PREDICT_NEXT_ACTION:
                             s_t0 = None
                         break
+                results.append((batch['file'], env.storage))
