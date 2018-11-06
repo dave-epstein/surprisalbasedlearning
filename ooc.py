@@ -49,6 +49,12 @@ parser.add_argument('--parallel', '-p', type=str2bool,
                     help='Flag for whether batch workers should run in parallel', default=True)
 parser.add_argument('--num-workers', '-n', type=int,
                     help='How many workers should we use?', default=-1)
+parser.add_argument('--test-only', '-t', type=str2bool,
+                    help='Run only test?', default=False)
+parser.add_argument('--train-only', '-r', type=str2bool,
+                    help='Run only train?', default=False)
+parser.add_argument('--model-names', '-m',
+                    help='Enter the names of the model files to load separated by commas (default is "apnet.pt, sfpnet.pt")', default='apnet.pt,sfpnet.pt')
 args = parser.parse_args()
 
 PREDICT_NEXT_ACTION = False
@@ -380,153 +386,158 @@ if __name__ == "__main__":
     apnet = ActionPredictor().to(device)
     sfpnet = StateFeaturePredictor(apnet.phi).to(device)
 
-    optimizer = torch.optim.Adam(nn.ModuleList(
-        [apnet, sfpnet]).parameters(), lr=LEARNING_RATE)
+    if not args.test_only:
+        optimizer = torch.optim.Adam(nn.ModuleList(
+            [apnet, sfpnet]).parameters(), lr=LEARNING_RATE)
 
-    s_t0, a_t0, s_t1 = None, None, None
+        s_t0, a_t0, s_t1 = None, None, None
 
-    ctr = 0
-    batch_ctr = 0
-    actions_per_batch = []
+        ctr = 0
+        batch_ctr = 0
+        actions_per_batch = []
 
-    # data viz stuff
-    plt_xs = []
-    plt_y1s = []
-    plt_y2s = []
+        # data viz stuff
+        plt_xs = []
+        plt_y1s = []
+        plt_y2s = []
 
-    if VISUALIZE:
-        ax1, ax2 = init_viz()
-
-    cum_loss = 0
-    total_guess = 0
-    correct_guess = 0
-
-    data_loader = D.DataLoader(
-        dataset=sun_dataset,
-        shuffle=True,
-        batch_size=BATCH_SIZE,
-        num_workers=NUM_WORKERS,
-        collate_fn=SUNDataset.collate
-    )
-
-    test_data_loader = D.DataLoader(
-        dataset=test_sun_dataset,
-        shuffle=True,
-        batch_size=BATCH_SIZE,
-        num_workers=NUM_WORKERS,
-        collate_fn=SUNDataset.collate
-    )
-
-    best_acc = 0
-
-    for i in range(NUM_EPOCHS):
-        print('starting epoch', i)
-        for idx, batch in enumerate(data_loader):
-            batch = preprocess_batch(batch)
-            # the environment represents the set of images we're currently training on and knows what region of the image we are at
-            env = ActionEnvironment(batch['img'])
-            while True:
-                s_t1 = env.state  # get current state of the environment
-
-                if s_t0 is not None:
-                    a_hat = apnet(s_t0, s_t1)  # inverse module
-                    phi_hat = sfpnet(s_t0, a_t0)  # forward module
-
-                    # manually keep track of action accuracy - 25% is random guess
-                    total_guess += len(batch['img'])
-                    correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1).to(device)
-                                         == torch.argmax(a_hat, dim=1)).item()
-
-                    # calculate loss
-                    loss = loss_fn(a_hat, a_t0, phi_hat,
-                                   apnet.phi(to_phi_input(s_t1)), env.adjusted_actions)
-                    # print(ctr, loss.item())
-
-                    # visualize loss
-                    cum_loss += loss.item()
-                    if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
-                        visualize_loss(ctr, cum_loss/ctr,
-                                       (correct_guess*100)/total_guess, VISUALIZE)
-                        if len(actions_per_batch) > 0:
-                            print('actions per batch: ' +
-                                  str(sum(actions_per_batch)/len(actions_per_batch)))
-                        # visualize_env(s_t0, s_t1, a_t0, a_hat)
-
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-
-                ctr += BATCH_SIZE
-                batch_ctr += 1
-
-                s_t0 = s_t1
-                env.step()
-                a_t0 = env.last_action
-
-                if env.done:
-                    if not PREDICT_NEXT_ACTION:
-                        s_t0 = None
-                        actions_per_batch.append(batch_ctr)
-                        batch_ctr = 0
-                    break
-
-        if correct_guess/total_guess > best_acc:
-            best_acc = correct_guess/total_guess
-            print('new best accuracy', i, (correct_guess*100)/total_guess)
-
-        torch.save(apnet, 'apnet{0}-acc{1}.pt'.format(i,
-                                                      round((correct_guess*100)/total_guess, 2)))
-        torch.save(sfpnet, 'sfpnet{0}.pt'.format(i))
+        if VISUALIZE:
+            ax1, ax2 = init_viz()
 
         cum_loss = 0
         total_guess = 0
         correct_guess = 0
 
-    torch.save(apnet, 'apnet.pt')
+        data_loader = D.DataLoader(
+            dataset=sun_dataset,
+            shuffle=True,
+            batch_size=BATCH_SIZE,
+            num_workers=NUM_WORKERS,
+            collate_fn=SUNDataset.collate
+        )
 
-    print('-TESTING----------------------------')
+        test_data_loader = D.DataLoader(
+            dataset=test_sun_dataset,
+            shuffle=True,
+            batch_size=BATCH_SIZE,
+            num_workers=NUM_WORKERS,
+            collate_fn=SUNDataset.collate
+        )
 
-    with torch.no_grad():
-        for batch in test_data_loader:
-            batch = preprocess_batch(batch)
-            env = ActionEnvironment(batch['img'])
-            while True:
-                s_t1 = env.state  # get current state of the environment
+        best_acc = 0
 
-                if s_t0 is not None:
-                    a_hat = apnet(s_t0, s_t1)  # inverse module
-                    phi_hat = sfpnet(s_t0, a_t0)  # forward module
+        for i in range(NUM_EPOCHS):
+            print('starting epoch', i)
+            for idx, batch in enumerate(data_loader):
+                batch = preprocess_batch(batch)
+                # the environment represents the set of images we're currently training on and knows what region of the image we are at
+                env = ActionEnvironment(batch['img'])
+                while True:
+                    s_t1 = env.state  # get current state of the environment
 
-                    # manually keep track of action accuracy - 25% is random guess
-                    total_guess += len(batch['img'])
-                    correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1)
-                                         == torch.argmax(a_hat, dim=1)).item()
+                    if s_t0 is not None:
+                        a_hat = apnet(s_t0, s_t1)  # inverse module
+                        phi_hat = sfpnet(s_t0, a_t0)  # forward module
 
-                    # calculate loss
-                    loss = loss_fn(a_hat, a_t0, phi_hat,
-                                   apnet.phi(to_phi_input(s_t1)), env.adjusted_actions)
-                    # print(ctr, loss.item())
+                        # manually keep track of action accuracy - 25% is random guess
+                        total_guess += len(batch['img'])
+                        correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1).to(device)
+                                             == torch.argmax(a_hat, dim=1)).item()
 
-                    # visualize loss
-                    cum_loss += loss.item()
-                    if ctr > 0 and ctr % UPDATE_FREQ == 0:
-                        visualize_loss(ctr, cum_loss/ctr,
-                                       (correct_guess*100)/total_guess)
-                        if len(actions_per_batch) > 0:
-                            print('actions per batch: ' +
-                                  str(sum(actions_per_batch)/len(actions_per_batch)))
-                        # visualize_env(s_t0, s_t1, a_t0, a_hat)
+                        # calculate loss
+                        loss = loss_fn(a_hat, a_t0, phi_hat,
+                                       apnet.phi(to_phi_input(s_t1)), env.adjusted_actions)
+                        # print(ctr, loss.item())
 
-                ctr += 1
-                batch_ctr += 1
+                        # visualize loss
+                        cum_loss += loss.item()
+                        if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
+                            visualize_loss(ctr, cum_loss/ctr,
+                                           (correct_guess*100)/total_guess, VISUALIZE)
+                            if len(actions_per_batch) > 0:
+                                print('actions per batch: ' +
+                                      str(sum(actions_per_batch)/len(actions_per_batch)))
+                            # visualize_env(s_t0, s_t1, a_t0, a_hat)
 
-                s_t0 = s_t1
-                env.step()
-                a_t0 = env.last_action
+                        optimizer.zero_grad()
+                        loss.backward()
+                        optimizer.step()
 
-                if env.done:
-                    if not PREDICT_NEXT_ACTION:
-                        s_t0 = None
-                        actions_per_batch.append(batch_ctr)
-                        batch_ctr = 0
-                    break
+                    ctr += BATCH_SIZE
+                    batch_ctr += 1
+
+                    s_t0 = s_t1
+                    env.step()
+                    a_t0 = env.last_action
+
+                    if env.done:
+                        if not PREDICT_NEXT_ACTION:
+                            s_t0 = None
+                            actions_per_batch.append(batch_ctr)
+                            batch_ctr = 0
+                        break
+
+            if correct_guess/total_guess > best_acc:
+                best_acc = correct_guess/total_guess
+                print('new best accuracy', i, (correct_guess*100)/total_guess)
+
+            torch.save(apnet.state_dict(), 'apnet{0}-acc{1}.pt'.format(i,
+                                                                       round((correct_guess*100)/total_guess, 2)))
+            torch.save(sfpnet.state_dict(), 'sfpnet{0}.pt'.format(i))
+
+            cum_loss = 0
+            total_guess = 0
+            correct_guess = 0
+
+        # torch.save(apnet, 'apnet-final.pt')
+    else:
+        model_names = args.model_names.split(',')
+        apnet.load_state_dict(torch.load(model_names[0]))
+        sfpnet.load_state_dict(torch.load(model_names[1]))
+
+    if not args.train_only:
+        with torch.no_grad():
+            print('TESTING ACTION RECOGNITION ACCURACY')
+            for batch in test_data_loader:
+                batch = preprocess_batch(batch)
+                env = ActionEnvironment(batch['img'])
+                while True:
+                    s_t1 = env.state  # get current state of the environment
+
+                    if s_t0 is not None:
+                        a_hat = apnet(s_t0, s_t1)  # inverse module
+                        # phi_hat = sfpnet(s_t0, a_t0)  # forward module
+
+                        # manually keep track of action accuracy - 25% is random guess
+                        total_guess += len(batch['img'])
+                        correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1)
+                                             == torch.argmax(a_hat, dim=1)).item()
+
+                        # calculate loss
+                        loss = loss_fn(a_hat, a_t0, phi_hat,
+                                       apnet.phi(to_phi_input(s_t1)), env.adjusted_actions)
+                        # print(ctr, loss.item())
+
+                        # visualize loss
+                        cum_loss += loss.item()
+                        if ctr > 0 and ctr % UPDATE_FREQ == 0 and UPDATE_FREQ > 0:
+                            visualize_loss(ctr, cum_loss/ctr,
+                                           (correct_guess*100)/total_guess, VISUALIZE)
+                            if len(actions_per_batch) > 0:
+                                print('actions per batch: ' +
+                                      str(sum(actions_per_batch)/len(actions_per_batch)))
+                            # visualize_env(s_t0, s_t1, a_t0, a_hat)
+
+                    ctr += 1
+                    batch_ctr += 1
+
+                    s_t0 = s_t1
+                    env.step()
+                    a_t0 = env.last_action
+
+                    if env.done:
+                        if not PREDICT_NEXT_ACTION:
+                            s_t0 = None
+                            actions_per_batch.append(batch_ctr)
+                            batch_ctr = 0
+                        break
