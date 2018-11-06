@@ -92,11 +92,11 @@ if NUM_WORKERS < 0 and PARALLEL:
     NUM_WORKERS = args.batch_size
 VISUALIZE = args.visualize
 
-dtypes = torch.cuda if torch.cuda.is_available() else torch
+dtypes = torch.cuda if torch.cuda.is_available() and args.gpu_id > -1 else torch
 device = torch.device("cuda:{0}".format(
     args.gpu_id) if torch.cuda.is_available() and args.gpu_id > -1 else "cpu")
 
-if __name__ == "__main__" and torch.cuda.is_available():
+if __name__ == "__main__" and torch.cuda.is_available() and args.gpu_id > -1:
     try:
         import torch.multiprocessing as multiprocessing
         multiprocessing.set_start_method('spawn', force=True)
