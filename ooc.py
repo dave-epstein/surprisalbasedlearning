@@ -476,6 +476,7 @@ if __name__ == "__main__":
 
         torch.save(apnet, 'apnet{0}-acc{1}.pt'.format(i,
                                                       round((correct_guess*100)/total_guess, 2)))
+        torch.save(sfpnet, 'sfpnet{0}.pt'.format(i))
 
         cum_loss = 0
         total_guess = 0
