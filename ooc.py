@@ -114,9 +114,9 @@ def to_tensor_f(l):
 
 def to_tensor(l, type=dtypes.LongTensor):
     try:
-        return type(l)
+        return type(l).to(device)
     except:
-        return l.type(type)
+        return l.type(type).to(device)
 
 
 class Action(Enum):
