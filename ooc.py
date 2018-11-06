@@ -541,7 +541,7 @@ if __name__ == "__main__":
                     if s_t0 is not None:
                         a_hat = apnet(s_t0, s_t1)  # inverse module
                         test_total_guess += len(batch['img'])
-                        test_correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1)
+                        test_correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1).to(device)
                                                   == torch.argmax(a_hat, dim=1)).item()
 
                         if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
