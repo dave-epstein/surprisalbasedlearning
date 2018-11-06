@@ -70,8 +70,7 @@ parser.add_argument('--train-only', '-r', type=str2bool,
                     help='Run only train?', default=False)
 parser.add_argument('--model-names', '-m',
                     help='Enter the names of the model files to load separated by commas (default is "apnet.pt, sfpnet.pt")', default='apnet.pt,sfpnet.pt')
-parser.add_argument(
-    '--gpu-id', '-g', help='Enter the ID of the CUDA-enabled GPU to run on, if one exists (enter -1 to force CPU)', default=0, type=int)
+
 args = parser.parse_args()
 
 PREDICT_NEXT_ACTION = False
@@ -92,11 +91,10 @@ if NUM_WORKERS < 0 and PARALLEL:
     NUM_WORKERS = args.batch_size
 VISUALIZE = args.visualize
 
-dtypes = torch.cuda if torch.cuda.is_available() and args.gpu_id > -1 else torch
-device = torch.device("cuda:{0}".format(
-    args.gpu_id) if torch.cuda.is_available() and args.gpu_id > -1 else "cpu")
+dtypes = torch.cuda if torch.cuda.is_available() else torch
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-if __name__ == "__main__" and torch.cuda.is_available() and args.gpu_id > -1:
+if __name__ == "__main__" and torch.cuda.is_available():
     try:
         import torch.multiprocessing as multiprocessing
         multiprocessing.set_start_method('spawn', force=True)
@@ -114,9 +112,9 @@ def to_tensor_f(l):
 
 def to_tensor(l, type=dtypes.LongTensor):
     try:
-        return type(l).to(device)
+        return type(l)
     except:
-        return l.type(type).to(device)
+        return l.type(type)
 
 
 class Action(Enum):
@@ -543,7 +541,7 @@ if __name__ == "__main__":
                     if s_t0 is not None:
                         a_hat = apnet(s_t0, s_t1)  # inverse module
                         test_total_guess += len(batch['img'])
-                        test_correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1).to(device)
+                        test_correct_guess += sum(torch.argmax(a_t0.to_onehot()[:a_hat.shape[0]], dim=1)
                                                   == torch.argmax(a_hat, dim=1)).item()
 
                         if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
