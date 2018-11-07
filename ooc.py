@@ -13,7 +13,7 @@ import skimage
 import skimage.io
 import skimage.transform
 from enum import Enum
-from math import ceil
+from math import ceil, floor
 from densenet import DenseNet
 import argparse
 import string
@@ -110,7 +110,7 @@ if __name__ == "__main__" and torch.cuda.is_available():
 
 
 def to_phi_input(s):
-    return to_tensor_f(s).view(len(s), 3, LENS_SIZE, -1)
+    return to_tensor_f(s).permute(*range(0, -len(s), -1))
 
 
 def to_tensor_f(l):
@@ -199,11 +199,14 @@ class SUNDataset(D.Dataset):  # TODO
         return len(self.files)
 
     def __getitem__(self, i):
-        # self.files_accessed.add(self.files[i])
-        img = skimage.io.imread(self.files[i], img_num=0)
-        for t in self.transforms:
-            img = t(img, self.files[i])
+        img = self.read_image(self.files[i])
         return {'img': img, 'file': self.files[i], 'dims': img.shape}
+
+    def read_image(self, file):
+        img = skimage.io.imread(file, img_num=0)
+        for t in self.transforms:
+            img = t(img, file)
+        return img
 
     def display_image(self, i):
         plt.figure()
@@ -316,7 +319,7 @@ class ActionEnvironment():
         self.deterministic = deterministic
         if deterministic:
             self.deterministic_actions = spiral_actions(
-                *self.dims.max().repeat(2).cpu().numpy().tolist())
+                *self.dims.max().repeat(2).tolist())
             self.coords = torch.stack([(_-1)//2 for _ in self.dims]).to(device)
         self.update_state()
 
@@ -390,6 +393,29 @@ def visualize_loss(ctr, loss, acc, viz):
         ax2.plot(plt_xs, plt_y2s, color='tab:blue')
         plt.draw()
         plt.pause(0.001)
+
+
+def visualize_surprise(files, surprise, dataset, disp_size=None):
+    disp_size = disp_size or len(files)
+    num_disps = ceil(len(files)/disp_size)
+    for i in range(num_disps):
+        files_, surprise_ = files[i*disp_size:(i+1) *
+                                  disp_size], surprise[i*disp_size:(i+1)*disp_size]
+        fig = plt.figure()
+        rows = len(files_)
+        cols = 3
+        i = 1
+        for f, s in zip(files_, surprise_):
+            im = dataset.read_image(f)
+            s = (s/s.max()).view(-1, 1).repeat(1, LENS_SIZE).view(s.shape[0], s.shape[1]*LENS_SIZE).repeat(
+                1, LENS_SIZE).view(s.shape[0]*LENS_SIZE, s.shape[1]*LENS_SIZE)
+            im_s = torch.cat([to_tensor_f(im), s.unsqueeze(-1)], dim=-1)
+            for img, txt, j in zip([im,s,im_s],[f,'Surprise matrix','Surprise overlay'], range(3)):
+                fig.add_subplot(rows, cols, i+j)
+                plt.axis('off')
+                plt.text(-5, -10, txt)
+                plt.imshow(img)
+            i += 3
 
 
 def init_viz():
@@ -558,35 +584,35 @@ if __name__ == "__main__":
         with torch.no_grad():
             s_t0, a_t0, s_t1 = None, None, None
             test_total_guess, test_correct_guess, ctr = 0, 0, 0
-            print('TESTING ACTION RECOGNITION ACCURACY')
-            for batch in test_data_loader:
-                batch = preprocess_batch(batch)
-                env = ActionEnvironment(batch['img'])
-                while True:
-                    s_t1 = env.state  # get current state of the environment
+            # print('TESTING ACTION RECOGNITION ACCURACY')
+            # for batch in test_data_loader:
+            #     batch = preprocess_batch(batch)
+            #     env = ActionEnvironment(batch['img'])
+            #     while True:
+            #         s_t1 = env.state  # get current state of the environment
 
-                    if s_t0 is not None:
-                        a_hat = apnet(s_t0, s_t1)  # inverse module
-                        test_total_guess += len(batch['img'])
-                        test_correct_guess += sum(torch.argmax(actions_to_onehot(a_t0), dim=1)
-                                                  == torch.argmax(a_hat, dim=1)).item()
-                        if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
-                            print('cumul accuracy', round(
-                                (test_correct_guess*100)/test_total_guess, 2))
+            #         if s_t0 is not None:
+            #             a_hat = apnet(s_t0, s_t1)  # inverse module
+            #             test_total_guess += len(batch['img'])
+            #             test_correct_guess += sum(torch.argmax(actions_to_onehot(a_t0), dim=1)
+            #                                       == torch.argmax(a_hat, dim=1)).item()
+            #             if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
+            #                 print('cumul accuracy', round(
+            #                     (test_correct_guess*100)/test_total_guess, 2))
 
-                    ctr += BATCH_SIZE
+            #         ctr += BATCH_SIZE
 
-                    s_t0 = s_t1
-                    env.step()
-                    a_t0 = env.last_action
+            #         s_t0 = s_t1
+            #         env.step()
+            #         a_t0 = env.last_action
 
-                    if env.done:
-                        if not PREDICT_NEXT_ACTION:
-                            s_t0 = None
-                        break
+            #         if env.done:
+            #             if not PREDICT_NEXT_ACTION:
+            #                 s_t0 = None
+            #             break
 
-            print('final accuracy', round(
-                (test_correct_guess*100)/test_total_guess, 2))
+            # print('final accuracy', round(
+            #     (test_correct_guess*100)/test_total_guess, 2))
 
             ooc_data_loader = D.DataLoader(
                 dataset=ooc_sun_dataset,
@@ -619,6 +645,9 @@ if __name__ == "__main__":
                             s_t0 = None
                         break
                 results.append((batch['file'], env.storage))
+                
+                if VISUALIZE:
+                    visualize_surprise(*results[-1], ooc_sun_dataset)
 
             # TODO visualize results
             # print(results)
