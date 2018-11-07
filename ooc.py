@@ -288,11 +288,9 @@ class ActionPolicy():
     def act(self):
         for r in self.remaining:
             if SKIP_DECAY_CONSTANT**(r.item()/2) >= random.random():
-                return [Action.NEXT for _ in self.remaining]
+                return Action.NEXT
         self.remaining -= 1
-        act = random.choice(list(Action)[:-1])
-        return [act for _ in self.remaining]
-        # return list(Action)[1]
+        return random.choice(list(Action)[:-1])
 
 
 class ActionEnvironment():
@@ -303,54 +301,47 @@ class ActionEnvironment():
             [len(self.batch), 2], dtype=torch.long).to(device)
         self.dims = to_tensor(
             [[ceil(im.shape[0]/LENS_SIZE), ceil(im.shape[1]/LENS_SIZE)] for im in self.batch])
-        self.update_state()
         self.policy = ActionPolicy(self.dims)
         self.done = False
         self.last_action = None
-        self.adjusted_actions = torch.zeros(len(self.batch))
+        self.adjusted_actions = torch.zeros(len(self.batch)).to(device)
         self.storage = [torch.zeros(tuple(_)).to(device) for _ in self.dims]
         self.deterministic = deterministic
         if deterministic:
-            self.deterministic_actions = [
-                spiral_actions(*tuple(_)) for _ in self.dims]
+            self.deterministic_actions = spiral_actions(
+                *self.dims.max().repeat(2).numpy().tolist())
+            self.coords = torch.stack([(_-1)//2 for _ in self.dims]).to(device)
+        self.update_state()
 
     def update_state(self):
         self.state = torch.stack([im[int(co[0]*LENS_SIZE):int((co[0]+1)*LENS_SIZE), int(co[1]*LENS_SIZE):int((co[1]+1)*LENS_SIZE)]
                                   for im, co in zip(self.batch, self.coords)])
         # overflow results in non square lens
 
-    def store(self, data, store_adjusted=False):
+    def store(self, data, overwrite=False):
         # data is of shape [len(self.batch)], is stored at the coordinate of each image
         for datum, cell, coord, adj in zip(data, self.storage, self.coords, self.adjusted_actions):
-            if store_adjusted or not adj:
-                cell[tuple(coord)] = datum
+            # assume never submit 0 as data
+            if not overwrite:
+                cell[tuple(coord)] = cell[tuple(coord)] or datum
 
     def step(self):
-        if self.deterministic:
-            self.last_action = [_.pop(0) if len(
-                _) > 0 else Action.NEXT for _ in self.deterministic_actions]
-            if Action.NEXT not in self.last_action:
-                self.coords += to_tensor([_.value for _ in self.last_action])
-                self.adjusted_actions = torch.ByteTensor([
-                    _ == Action.NEXT for _ in self.last_action]).to(device)
-            else:
-                self.last_action = [Action.NEXT for _ in self.batch]
-                self.done = True
+        act = (self.deterministic_actions.pop(0) if len(
+            self.deterministic_actions) > 0 else Action.NEXT) if self.deterministic else self.policy.act()
+        self.last_action = [act for _ in self.batch]
+        if act != Action.NEXT:
+            self.coords += to_tensor(act.value)
+            # in case of dimension out of bounds, stay at boundary (i.e. take no action)
+            overflow_adjustment = to_tensor(self.coords == self.dims)
+            underflow_adjustment = to_tensor(self.coords < 0)
+            self.adjusted_actions = (
+                overflow_adjustment + underflow_adjustment).sum(dim=1) > 0
+            self.policy.remaining += to_tensor(self.adjusted_actions)
+            self.coords -= overflow_adjustment
+            self.coords += underflow_adjustment
+            self.update_state()
         else:
-            self.last_action = self.policy.act()
-            if self.last_action[0] != Action.NEXT:
-                self.coords += to_tensor([_.value for _ in self.last_action])
-                # in case of dimension out of bounds, stay at boundary (i.e. take no action)
-                overflow_adjustment = to_tensor(self.coords == self.dims)
-                underflow_adjustment = to_tensor(self.coords < 0)
-                self.adjusted_actions = (
-                    overflow_adjustment + underflow_adjustment).sum(dim=1) > 0
-                self.policy.remaining += to_tensor(self.adjusted_actions)
-                self.coords -= overflow_adjustment
-                self.coords += underflow_adjustment
-                self.update_state()
-            else:
-                self.done = True
+            self.done = True
 
 
 def loss_fn(a_hat, a, phi_hat, phi, adj_acts):
@@ -548,7 +539,7 @@ if __name__ == "__main__":
             print('TESTING ACTION RECOGNITION ACCURACY')
             for batch in test_data_loader:
                 batch = preprocess_batch(batch)
-                env = ActionEnvironment(batch['img'], deterministic=True)
+                env = ActionEnvironment(batch['img'])
                 while True:
                     s_t1 = env.state  # get current state of the environment
 
@@ -557,7 +548,6 @@ if __name__ == "__main__":
                         test_total_guess += len(batch['img'])
                         test_correct_guess += sum(torch.argmax(actions_to_onehot(a_t0), dim=1)
                                                   == torch.argmax(a_hat, dim=1)).item()
-
                         if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
                             print('cumul accuracy', round(
                                 (test_correct_guess*100)/test_total_guess, 2))
@@ -588,7 +578,7 @@ if __name__ == "__main__":
             print('TESTING SURPRISAL INFORMATION')
             for batch in ooc_data_loader:
                 batch = preprocess_batch(batch)
-                env = ActionEnvironment(batch['img'])
+                env = ActionEnvironment(batch['img'], deterministic=True)
                 while True:
                     s_t1 = env.state  # get current state of the environment
 
