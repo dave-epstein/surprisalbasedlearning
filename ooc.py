@@ -584,35 +584,35 @@ if __name__ == "__main__":
         with torch.no_grad():
             s_t0, a_t0, s_t1 = None, None, None
             test_total_guess, test_correct_guess, ctr = 0, 0, 0
-            # print('TESTING ACTION RECOGNITION ACCURACY')
-            # for batch in test_data_loader:
-            #     batch = preprocess_batch(batch)
-            #     env = ActionEnvironment(batch['img'])
-            #     while True:
-            #         s_t1 = env.state  # get current state of the environment
+            print('TESTING ACTION RECOGNITION ACCURACY')
+            for batch in test_data_loader:
+                batch = preprocess_batch(batch)
+                env = ActionEnvironment(batch['img'])
+                while True:
+                    s_t1 = env.state  # get current state of the environment
 
-            #         if s_t0 is not None:
-            #             a_hat = apnet(s_t0, s_t1)  # inverse module
-            #             test_total_guess += len(batch['img'])
-            #             test_correct_guess += sum(torch.argmax(actions_to_onehot(a_t0), dim=1)
-            #                                       == torch.argmax(a_hat, dim=1)).item()
-            #             if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
-            #                 print('cumul accuracy', round(
-            #                     (test_correct_guess*100)/test_total_guess, 2))
+                    if s_t0 is not None:
+                        a_hat = apnet(s_t0, s_t1)  # inverse module
+                        test_total_guess += len(batch['img'])
+                        test_correct_guess += sum(torch.argmax(actions_to_onehot(a_t0), dim=1)
+                                                  == torch.argmax(a_hat, dim=1)).item()
+                        if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
+                            print('cumul accuracy', round(
+                                (test_correct_guess*100)/test_total_guess, 2))
 
-            #         ctr += BATCH_SIZE
+                    ctr += BATCH_SIZE
 
-            #         s_t0 = s_t1
-            #         env.step()
-            #         a_t0 = env.last_action
+                    s_t0 = s_t1
+                    env.step()
+                    a_t0 = env.last_action
 
-            #         if env.done:
-            #             if not PREDICT_NEXT_ACTION:
-            #                 s_t0 = None
-            #             break
+                    if env.done:
+                        if not PREDICT_NEXT_ACTION:
+                            s_t0 = None
+                        break
 
-            # print('final accuracy', round(
-            #     (test_correct_guess*100)/test_total_guess, 2))
+            print('final accuracy', round(
+                (test_correct_guess*100)/test_total_guess, 2))
 
             ooc_data_loader = D.DataLoader(
                 dataset=ooc_sun_dataset,
@@ -645,7 +645,7 @@ if __name__ == "__main__":
                             s_t0 = None
                         break
                 results.append((batch['file'], env.storage))
-                
+
                 if VISUALIZE:
                     visualize_surprise(*results[-1], ooc_sun_dataset)
 
