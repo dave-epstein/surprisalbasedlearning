@@ -110,7 +110,7 @@ if __name__ == "__main__" and torch.cuda.is_available():
 
 
 def to_phi_input(s):
-    return to_tensor_f(s).permute(*range(0, -len(s), -1))
+    return to_tensor_f(s).permute(*range(0, -len(s.shape), -1))
 
 
 def to_tensor_f(l):
