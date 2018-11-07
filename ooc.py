@@ -76,7 +76,7 @@ parser.add_argument('--model-names', '-m',
 parser.add_argument(
     '--run-id', '-i', help='If testing only and no model names provided, the five-letter run ID of the training run to use in testing')
 parser.add_argument('--run-epoch', '-e', type=int,
-                    help='If testing only and no model names provided, the epoch # of the SFPNet and APNet to use in testing')
+                    help='If testing only and no model names provided, the epoch # of the SFPNet and APNet to use in testing. If not testing only, the epoch from which to resume training.')
 
 args = parser.parse_args()
 
@@ -478,6 +478,17 @@ if __name__ == "__main__":
         collate_fn=SUNDataset.collate
     )
 
+    if args.model_names is not None or (args.run_id is not None and args.run_epoch is not None):
+        if args.model_names is not None:
+                model_names = args.model_names.split(',')
+        else:
+            model_names = glob('apnet{0}-{1}-*.pt'.format(args.run_id, args.run_epoch))[
+                    0], glob('sfpnet{0}-{1}.pt'.format(args.run_id, args.run_epoch))[0]
+            apnet.load_state_dict(torch.load(model_names[0], map_location=device))
+            sfpnet.load_state_dict(torch.load(model_names[1], map_location=device))
+        with open('{0}.log'.format(args.run_id, 'r')) as f:
+                test_sun_dataset.files = json.load(f)
+
     if not args.test_only:
         optimizer = torch.optim.Adam(nn.ModuleList(
             [apnet, sfpnet]).parameters(), lr=LEARNING_RATE)
@@ -569,16 +580,7 @@ if __name__ == "__main__":
             correct_guess = 0
 
         # torch.save(apnet, 'apnet-final.pt')
-    else:
-        if args.model_names is not None:
-            model_names = args.model_names.split(',')
-        else:
-            model_names = glob('apnet{0}-{1}-*.pt'.format(args.run_id, args.run_epoch))[
-                0], glob('sfpnet{0}-{1}.pt'.format(args.run_id, args.run_epoch))[0]
-        apnet.load_state_dict(torch.load(model_names[0], map_location=device))
-        sfpnet.load_state_dict(torch.load(model_names[1], map_location=device))
-        with open('{0}.log'.format(args.run_id, 'r')) as f:
-            test_sun_dataset.files = json.load(f)
+        
 
     if not args.train_only:
         with torch.no_grad():
@@ -624,6 +626,10 @@ if __name__ == "__main__":
 
             results = []
             print('TESTING SURPRISAL INFORMATION')
+
+            plt.ion()
+            plt.show()
+
             for batch in ooc_data_loader:
                 batch = preprocess_batch(batch)
                 env = ActionEnvironment(batch['img'], deterministic=True)
@@ -648,6 +654,9 @@ if __name__ == "__main__":
 
                 if VISUALIZE:
                     visualize_surprise(*results[-1], ooc_sun_dataset)
+
+            # with open('{0}-results.log'.format(args.run_id), 'w') as f:
+            # f.write(json.dumps(results))
 
             # TODO visualize results
             # print(results)
