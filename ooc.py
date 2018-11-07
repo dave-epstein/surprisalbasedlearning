@@ -18,6 +18,7 @@ from densenet import DenseNet
 import argparse
 import string
 import json
+from glob import glob
 
 
 def str2bool(v):
@@ -71,7 +72,11 @@ parser.add_argument('--test-only', '-t', type=str2bool,
 parser.add_argument('--train-only', '-r', type=str2bool,
                     help='Run only train?', default=False)
 parser.add_argument('--model-names', '-m',
-                    help='Enter the names of the model files to load separated by commas (default is "apnet.pt, sfpnet.pt")', default='apnet.pt,sfpnet.pt')
+                    help='Enter the names of the model files to load separated by commas')
+parser.add_argument(
+    '--run-id', '-i', help='If testing only and no model names provided, the five-letter run ID of the training run to use in testing')
+parser.add_argument('--run-epoch', '-e', type=int,
+                    help='If testing only and no model names provided, the epoch # of the SFPNet and APNet to use in testing')
 
 args = parser.parse_args()
 
@@ -363,10 +368,12 @@ def visualize_env(s_t0, s_t1, a_t0, a_hat):
     cols = len(a_hat)
     for i in range(1, rows*cols + 1):
         fig.add_subplot(rows, cols, i)
-        s_t0_str = 'True action: {}'.format(a_t0)
+        s_t0_str = 'True action: {}'.format(
+            a_t0[(i-1) % len(a_hat)]).replace('Action.', '')
         s_t1_str = 'Prediction: {}'.format(
-            list(Action)[a_hat[(i-1) % len(a_hat)].argmax()])
-        plt.text(0, 0, s_t1_str if i > len(a_hat) else s_t0_str)
+            list(Action)[a_hat[(i-1) % len(a_hat)].argmax()]).replace('Action.', '')
+        plt.text(-5, -10, s_t1_str if i > len(a_hat) else s_t0_str)
+        plt.axis('off')
         plt.imshow((s_t1 if i > len(a_hat) else s_t0)[
                    (i-1) % len(a_hat)], interpolation='nearest')
     plt.show()
@@ -537,9 +544,15 @@ if __name__ == "__main__":
 
         # torch.save(apnet, 'apnet-final.pt')
     else:
-        model_names = args.model_names.split(',')
+        if args.model_names is not None:
+            model_names = args.model_names.split(',')
+        else:
+            model_names = glob('apnet{0}-{1}-*.pt'.format(args.run_id, args.run_epoch))[
+                0], glob('sfpnet{0}-{1}.pt'.format(args.run_id, args.run_epoch))[0]
         apnet.load_state_dict(torch.load(model_names[0], map_location=device))
         sfpnet.load_state_dict(torch.load(model_names[1], map_location=device))
+        with open('{0}.log'.format(args.run_id, 'r')) as f:
+            test_sun_dataset.files = json.load(f)
 
     if not args.train_only:
         with torch.no_grad():
