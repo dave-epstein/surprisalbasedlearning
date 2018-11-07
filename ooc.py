@@ -16,6 +16,8 @@ from enum import Enum
 from math import ceil
 from densenet import DenseNet
 import argparse
+import string
+import json
 
 
 def str2bool(v):
@@ -411,8 +413,14 @@ def preprocess_batch(batch):
 
 
 if __name__ == "__main__":
+    RUN_ID = ''.join(random.choices(string.ascii_uppercase, k=5))
+
     sun_dataset = SUNDataset(
         path='sun2012/', transforms=[Resize(LENS_SIZE*7), CropToMultiple(LENS_SIZE)])
+
+    with open("{0}.log".format(RUN_ID), 'w') as f:
+        f.write(json.dumps(sun_dataset.other_files))
+
     test_sun_dataset = SUNDataset(
         files=sun_dataset.other_files, transforms=sun_dataset.transforms)
     ooc_sun_dataset = SUNDataset(
@@ -518,9 +526,10 @@ if __name__ == "__main__":
                 best_acc = correct_guess/total_guess
                 print('new best accuracy', i, (correct_guess*100)/total_guess)
 
-            torch.save(apnet.state_dict(), 'apnet{0}-acc{1}.pt'.format(i,
-                                                                       round((correct_guess*100)/total_guess, 2)))
-            torch.save(sfpnet.state_dict(), 'sfpnet{0}.pt'.format(i))
+            torch.save(apnet.state_dict(), 'apnet{2}-{0}-acc{1}.pt'.format(i,
+                                                                           round((correct_guess*100)/total_guess, 2), RUN_ID))
+            torch.save(sfpnet.state_dict(),
+                       'sfpnet{1}-{0}.pt'.format(i, RUN_ID))
 
             cum_loss = 0
             total_guess = 0
