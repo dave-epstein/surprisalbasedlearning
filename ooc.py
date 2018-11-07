@@ -309,7 +309,7 @@ class ActionEnvironment():
         self.deterministic = deterministic
         if deterministic:
             self.deterministic_actions = spiral_actions(
-                *self.dims.max().repeat(2).numpy().tolist())
+                *self.dims.max().repeat(2).cpu().numpy().tolist())
             self.coords = torch.stack([(_-1)//2 for _ in self.dims]).to(device)
         self.update_state()
 
@@ -598,5 +598,5 @@ if __name__ == "__main__":
                         break
                 results.append((batch['file'], env.storage))
 
-            # TODO visualize
-            print(results)
+            # TODO visualize results
+            # print(results)
