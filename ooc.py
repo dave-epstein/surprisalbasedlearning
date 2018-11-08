@@ -424,11 +424,11 @@ def visualize_surprise(files, surprise, dataset, disp_size=None):
         i = 1
         for f, s in zip(files_, surprise_):
             im = dataset.read_image(f)
-            s = s**2
+            # s = s**2
             s = (s/s.max()).view(-1, 1).repeat(1, LENS_SIZE).view(s.shape[0], s.shape[1]*LENS_SIZE).repeat(
                 1, LENS_SIZE).view(s.shape[0]*LENS_SIZE, s.shape[1]*LENS_SIZE)
             im_s = torch.cat([to_tensor_f(im), s.unsqueeze(-1)], dim=-1)
-            for img, txt, j in zip([im, s, im_s], [f, 'Squared surprise matrix', 'Superimposed surprise'], range(3)):
+            for img, txt, j in zip([im, s, im_s], [f, 'Surprise matrix', 'Superimposed surprise'], range(3)):
                 fig.add_subplot(rows, cols, i+j)
                 plt.axis('off')
                 plt.text(-5, -10, txt)
@@ -610,8 +610,8 @@ if __name__ == "__main__":
 
     if not args.train_only:
         with torch.no_grad():
-            apnet.eval()
-            sfpnet.eval()
+            # apnet.eval()
+            # sfpnet.eval()
             if args.test_acc:
                 s_t0, a_t0, s_t1 = None, None, None
                 test_total_guess, test_correct_guess, ctr = 0, 0, 0
