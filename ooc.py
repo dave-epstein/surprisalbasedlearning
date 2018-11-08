@@ -78,7 +78,7 @@ parser.add_argument(
 parser.add_argument('--run-epoch', '-e', type=int,
                     help='If testing only and no model names provided, the epoch # of the SFPNet and APNet to use in testing. If not testing only, the epoch from which to resume training.')
 parser.add_argument('--test-acc', '-a', type=str2bool, help='Evaluate network accuracy on test data?', default=False)
-
+parser.add_argument('--test-surp', '-s', type=str2bool, help='Evaluate network surprise on OOC data?', default=True)
 args = parser.parse_args()
 
 PREDICT_NEXT_ACTION = False
@@ -627,34 +627,37 @@ if __name__ == "__main__":
                 collate_fn=SUNDataset.collate
             )
 
-            results = []
-            print('TESTING SURPRISAL INFORMATION')
+            if args.test_surp:
+                results = []
+                print('TESTING SURPRISAL INFORMATION')
 
-            for batch in ooc_data_loader:
-                batch = preprocess_batch(batch)
-                env = ActionEnvironment(batch['img'], deterministic=True)
-                while True:
-                    s_t1 = env.state  # get current state of the environment
+                s_t0, a_t0, s_t1 = None, None, None
 
-                    if s_t0 is not None:
-                        phi_hat = sfpnet(s_t0, a_t0)  # forward module
-                        surprise = F.mse_loss(
-                            phi_hat, apnet.phi(to_phi_input(s_t1)), reduction='none').sum(dim=1)
-                        env.store(surprise)
+                for batch in ooc_data_loader:
+                    batch = preprocess_batch(batch)
+                    env = ActionEnvironment(batch['img'], deterministic=True)
+                    while True:
+                        s_t1 = env.state  # get current state of the environment
 
-                    s_t0 = s_t1
-                    env.step()
-                    a_t0 = env.last_action
+                        if s_t0 is not None:
+                            phi_hat = sfpnet(s_t0, a_t0)  # forward module
+                            surprise = F.mse_loss(
+                                phi_hat, apnet.phi(to_phi_input(s_t1)), reduction='none').sum(dim=1)
+                            env.store(surprise)
 
-                    if env.done:
-                        if not PREDICT_NEXT_ACTION:
-                            s_t0 = None
-                        break
-                results.append((batch['file'], env.storage))
+                        s_t0 = s_t1
+                        env.step()
+                        a_t0 = env.last_action
 
-                if VISUALIZE:
-                    visualize_surprise(*results[-1], ooc_sun_dataset, disp_size=4)
-                    plt.show()
+                        if env.done:
+                            if not PREDICT_NEXT_ACTION:
+                                s_t0 = None
+                            break
+                    results.append((batch['file'], env.storage))
+
+                    if VISUALIZE:
+                        visualize_surprise(*results[-1], ooc_sun_dataset, disp_size=4)
+                        plt.show()
 
             # with open('{0}-results.log'.format(args.run_id), 'w') as f:
             # f.write(json.dumps(results))
