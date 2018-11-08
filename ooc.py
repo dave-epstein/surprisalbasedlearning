@@ -39,19 +39,25 @@ def round_up(n, b):
     return n + b - t
 
 
-def spiral_actions(Y, X):
+def snake_path(dims, dir, n):
+    Y, X = dims.max(dim=0)[0].tolist()
     r = []
-    d = [Action.LEFT, Action.UP, None, Action.DOWN, Action.RIGHT]
-    x = y = 0
-    dx = 0
-    dy = -1
-    for i in range(max(X, Y)**2):
-        if (-X/2 < x <= X/2) and (-Y/2 < y <= Y/2):
-            r.append(d[2*dx + dy + 2])
-        if x == y or (x < 0 and x == -y) or (x > 0 and x == 1-y):
-            dx, dy = -dy, dx
-        x, y = x+dx, y+dy
-    return r[1:]
+    c = torch.zeros([n, 2], dtype=torch.long).to(device)
+    if dir == Action.LEFT or dir == Action.RIGHT:
+        other_dir = Action.LEFT if dir == Action.RIGHT else Action.RIGHT
+        c[:] = to_tensor([[0, _[1].item()-1] if dir == Action.LEFT else [0,0] for _ in dims])
+        even_pass = [Action.DOWN, *[dir for _ in range(X-1)]]
+        odd_pass = [Action.DOWN, *[other_dir for _ in range(X-1)]]
+        for i in range(Y):
+            r.extend(even_pass if i%2==0 else odd_pass)
+    elif dir == Action.DOWN or dir == Action.UP:
+        other_dir = Action.DOWN if dir == Action.UP else Action.UP
+        c[:] = to_tensor([[_[0].item()-1, 0] if dir == Action.UP else [0,0] for _ in dims])
+        even_pass = [Action.RIGHT, *[dir for _ in range(Y-1)]]
+        odd_pass = [Action.RIGHT, *[other_dir for _ in range(Y-1)]]
+        for i in range(X):
+            r.extend(even_pass if i%2==0 else odd_pass)
+    return r[1:], c
 
 
 parser = argparse.ArgumentParser(
@@ -77,8 +83,10 @@ parser.add_argument(
     '--run-id', '-i', help='If testing only and no model names provided, the five-letter run ID of the training run to use in testing')
 parser.add_argument('--run-epoch', '-e', type=int,
                     help='If testing only and no model names provided, the epoch # of the SFPNet and APNet to use in testing. If not testing only, the epoch from which to resume training.')
-parser.add_argument('--test-acc', '-a', type=str2bool, help='Evaluate network accuracy on test data?', default=False)
-parser.add_argument('--test-surp', '-s', type=str2bool, help='Evaluate network surprise on OOC data?', default=True)
+parser.add_argument('--test-acc', '-a', type=str2bool,
+                    help='Evaluate network accuracy on test data?', default=False)
+parser.add_argument('--test-surp', '-s', type=str2bool,
+                    help='Evaluate network surprise on OOC data?', default=True)
 args = parser.parse_args()
 
 PREDICT_NEXT_ACTION = False
@@ -305,7 +313,7 @@ class ActionPolicy():
 
 
 class ActionEnvironment():
-    def __init__(self, batch, deterministic=False):
+    def __init__(self, batch, snake=False, snake_dir=None):
         self.batch = batch
         # in units of LENS_SIZE
         self.coords = torch.zeros(
@@ -317,11 +325,10 @@ class ActionEnvironment():
         self.last_action = None
         self.adjusted_actions = torch.zeros(len(self.batch)).to(device)
         self.storage = [torch.zeros(tuple(_)).to(device) for _ in self.dims]
-        self.deterministic = deterministic
-        if deterministic:
-            self.deterministic_actions = spiral_actions(
-                *self.dims.max().repeat(2).tolist())
-            self.coords = torch.stack([(_-1)//2 for _ in self.dims]).to(device)
+        self.snake = snake
+        self.snake_dir = snake_dir
+        if self.snake:
+            self.snake_acts, self.coords = snake_path(self.dims, self.snake_dir, len(self.batch))
         self.update_state()
 
     def update_state(self):
@@ -339,8 +346,8 @@ class ActionEnvironment():
                 cell[tuple(coord)] = cell[tuple(coord)] or datum
 
     def step(self):
-        act = (self.deterministic_actions.pop(0) if len(
-            self.deterministic_actions) > 0 else Action.NEXT) if self.deterministic else self.policy.act()
+        act = (self.snake_acts.pop(0) if len(
+            self.snake_acts) > 0 else Action.NEXT) if self.snake else self.policy.act()
         self.last_action = [act for _ in self.batch]
         if act != Action.NEXT:
             self.coords += to_tensor(act.value)
@@ -388,7 +395,7 @@ def visualize_env(s_t0, s_t1_, a_t0_, a_hat_, disp_size=None):
             plt.text(-5, -10, s_t1_str if i > len(a_hat_) else s_t0_str)
             plt.axis('off')
             plt.imshow((s_t1_ if i > len(a_hat_) else s_t0_)[
-                    (i-1) % len(a_hat_)], interpolation='nearest')
+                (i-1) % len(a_hat_)], interpolation='nearest')
     plt.show()
 
 
@@ -421,7 +428,7 @@ def visualize_surprise(files, surprise, dataset, disp_size=None):
             s = (s/s.max()).view(-1, 1).repeat(1, LENS_SIZE).view(s.shape[0], s.shape[1]*LENS_SIZE).repeat(
                 1, LENS_SIZE).view(s.shape[0]*LENS_SIZE, s.shape[1]*LENS_SIZE)
             im_s = torch.cat([to_tensor_f(im), s.unsqueeze(-1)], dim=-1)
-            for img, txt, j in zip([im,s,im_s],[f,'Squared surprise matrix','Superimposed surprise'], range(3)):
+            for img, txt, j in zip([im, s, im_s], [f, 'Squared surprise matrix', 'Superimposed surprise'], range(3)):
                 fig.add_subplot(rows, cols, i+j)
                 plt.axis('off')
                 plt.text(-5, -10, txt)
@@ -469,7 +476,7 @@ if __name__ == "__main__":
     test_sun_dataset = SUNDataset(
         files=sun_dataset.other_files, transforms=sun_dataset.transforms)
     ooc_sun_dataset = SUNDataset(
-        path='out_of_context/', transforms=[Resize(LENS_SIZE*7), CropToMultiple(LENS_SIZE)])
+        path='out_of_context/', transforms=[Resize(LENS_SIZE*4), CropToMultiple(LENS_SIZE)])
 
     apnet = ActionPredictor().to(device)
     sfpnet = StateFeaturePredictor(apnet.phi).to(device)
@@ -493,15 +500,18 @@ if __name__ == "__main__":
     if args.model_names is not None or (args.run_id is not None and args.run_epoch is not None):
         RUN_ID = args.run_id
         if args.model_names is not None:
-                model_names = args.model_names.split(',')
+            model_names = args.model_names.split(',')
         else:
             model_names = glob('apnet{0}-{1}-*.pt'.format(args.run_id, args.run_epoch))[
-                    0], glob('sfpnet{0}-{1}.pt'.format(args.run_id, args.run_epoch))[0]
-            apnet.load_state_dict(torch.load(model_names[0], map_location=device))
-            sfpnet.load_state_dict(torch.load(model_names[1], map_location=device))
+                0], glob('sfpnet{0}-{1}.pt'.format(args.run_id, args.run_epoch))[0]
+            apnet.load_state_dict(torch.load(
+                model_names[0], map_location=device))
+            sfpnet.load_state_dict(torch.load(
+                model_names[1], map_location=device))
         with open('{0}.log'.format(args.run_id, 'r')) as f:
-                test_sun_dataset.files = json.load(f)
-                sun_dataset.files = [f for f in sun_dataset.files if f not in test_sun_dataset.files]
+            test_sun_dataset.files = json.load(f)
+            sun_dataset.files = [
+                f for f in sun_dataset.files if f not in test_sun_dataset.files]
 
     if not args.test_only:
         optimizer = torch.optim.Adam(nn.ModuleList(
@@ -543,9 +553,10 @@ if __name__ == "__main__":
                         # manually keep track of action accuracy - 25% is random guess
                         adj_acts = env.adjusted_actions
                         if sum(adj_acts) < len(adj_acts):
-                            total_guess += len(batch['img']) - sum(adj_acts).item()
+                            total_guess += len(batch['img']) - \
+                                sum(adj_acts).item()
                             correct_guess += sum(torch.argmax(actions_to_onehot(a_t0)[~adj_acts], dim=1)
-                                                == torch.argmax(a_hat[~adj_acts], dim=1)).item()
+                                                 == torch.argmax(a_hat[~adj_acts], dim=1)).item()
 
                         # calculate loss
                         with torch.no_grad():
@@ -596,11 +607,11 @@ if __name__ == "__main__":
             correct_guess = 0
 
         # torch.save(apnet, 'apnet-final.pt')
-        
 
     if not args.train_only:
         with torch.no_grad():
-                
+            apnet.eval()
+            sfpnet.eval()
             if args.test_acc:
                 s_t0, a_t0, s_t1 = None, None, None
                 test_total_guess, test_correct_guess, ctr = 0, 0, 0
@@ -615,13 +626,15 @@ if __name__ == "__main__":
                             a_hat = apnet(s_t0, s_t1)  # inverse module
                             adj_acts = env.adjusted_actions
                             if sum(adj_acts) < len(adj_acts):
-                                test_total_guess += len(batch['img']) - sum(adj_acts).item()
+                                test_total_guess += len(batch['img']) - \
+                                    sum(adj_acts).item()
                                 test_correct_guess += sum(torch.argmax(actions_to_onehot(a_t0)[~adj_acts], dim=1)
-                                                        == torch.argmax(a_hat, dim=1)[~adj_acts]).item()
+                                                          == torch.argmax(a_hat, dim=1)[~adj_acts]).item()
                             if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
                                 print('cumul accuracy', round(
                                     (test_correct_guess*100)/test_total_guess, 2))
-                                visualize_env(s_t0, s_t1, a_t0, a_hat, disp_size=4)
+                                visualize_env(s_t0, s_t1, a_t0,
+                                              a_hat, disp_size=4)
 
                         ctr += BATCH_SIZE
 
@@ -653,28 +666,45 @@ if __name__ == "__main__":
 
                 for batch in ooc_data_loader:
                     batch = preprocess_batch(batch)
-                    env = ActionEnvironment(batch['img'], deterministic=True)
-                    while True:
-                        s_t1 = env.state  # get current state of the environment
+                    batch_results = []
+                    for dir in [Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT]:
+                        env = ActionEnvironment(batch['img'], snake=True, snake_dir=dir)
+                        while True:
+                            s_t1 = env.state  # get current state of the environment
 
-                        if s_t0 is not None:
-                            phi_hat = sfpnet(s_t0, a_t0)  # forward module
-                            surprise = F.mse_loss(
-                                phi_hat, apnet.phi(to_phi_input(s_t1)), reduction='none').sum(dim=1)
-                            env.store(surprise)
+                            if s_t0 is not None:
+                                phi_hat = sfpnet(s_t0, a_t0)  # forward module
+                                surprise = F.mse_loss(
+                                    phi_hat, apnet.phi(to_phi_input(s_t1)), reduction='none').sum(dim=1)
+                                env.store(surprise)
 
-                        s_t0 = s_t1
-                        env.step()
-                        a_t0 = env.last_action
+                            s_t0 = s_t1
+                            env.step()
+                            a_t0 = env.last_action
 
-                        if env.done:
-                            if not PREDICT_NEXT_ACTION:
-                                s_t0 = None
-                            break
-                    results.append((batch['file'], env.storage))
+                            if env.done:
+                                if not PREDICT_NEXT_ACTION:
+                                    s_t0 = None
+                                break
+                        batch_results.append(env.storage)
+                    res = []
+                    freq_matrices = [torch.ones(*d)*4 for d in env.dims]
+                    for m in freq_matrices:
+                        m[0,:] -= 1
+                        m[-1,:] -= 1
+                        m[:,0] -= 1
+                        m[:,-1] -= 1
+                    for br in batch_results:
+                        if len(res) == 0:
+                            res = [_.unsqueeze(-1) for _ in br]
+                        else:
+                            res = [torch.cat((_, __.unsqueeze(-1)), dim=-1) for _, __ in zip(res, br)]
+                    results.append((batch['file'], [(_.sum(dim=-1))/__ for _, __ in zip(res, freq_matrices)]))
+
 
                     if VISUALIZE:
-                        visualize_surprise(*results[-1], ooc_sun_dataset, disp_size=4)
+                        visualize_surprise(
+                            *results[-1], ooc_sun_dataset, disp_size=4)
                         # plt.show()
 
             # with open('{0}-results.log'.format(args.run_id), 'w') as f:
