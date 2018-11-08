@@ -699,7 +699,7 @@ if __name__ == "__main__":
                             res = [_.unsqueeze(-1) for _ in br]
                         else:
                             res = [torch.cat((_, __.unsqueeze(-1)), dim=-1) for _, __ in zip(res, br)]
-                    results.append((batch['file'], [(_.sum(dim=-1))/__ for _, __ in zip(res, freq_matrices)]))
+                    results.append((batch['file'], [(_.sum(dim=-1)).to(device)/__.to(device) for _, __ in zip(res, freq_matrices)]))
 
 
                     if VISUALIZE:
