@@ -481,6 +481,7 @@ if __name__ == "__main__":
     )
 
     if args.model_names is not None or (args.run_id is not None and args.run_epoch is not None):
+        RUN_ID = args.run_id
         if args.model_names is not None:
                 model_names = args.model_names.split(',')
         else:
@@ -490,6 +491,7 @@ if __name__ == "__main__":
             sfpnet.load_state_dict(torch.load(model_names[1], map_location=device))
         with open('{0}.log'.format(args.run_id, 'r')) as f:
                 test_sun_dataset.files = json.load(f)
+                sun_dataset.files = [f for f in sun_dataset.files if f not in test_sun_dataset.files]
 
     if not args.test_only:
         optimizer = torch.optim.Adam(nn.ModuleList(
@@ -515,7 +517,7 @@ if __name__ == "__main__":
 
         best_acc = 0
 
-        for i in range(NUM_EPOCHS):
+        for i in range((args.run_epoch or -1) + 1, NUM_EPOCHS):
             print('starting epoch', i)
             for idx, batch in enumerate(data_loader):
                 batch = preprocess_batch(batch)
