@@ -365,21 +365,28 @@ def loss_fn(a_hat, a, phi_hat, phi, adj_acts):
     return BETA*fwd_loss + (1-BETA)*inv_loss
 
 
-def visualize_env(s_t0, s_t1, a_t0, a_hat):
-    fig = plt.figure()
-    plt.axis('off')
-    rows = 2
-    cols = len(a_hat)
-    for i in range(1, rows*cols + 1):
-        fig.add_subplot(rows, cols, i)
-        s_t0_str = 'True action: {}'.format(
-            a_t0[(i-1) % len(a_hat)]).replace('Action.', '')
-        s_t1_str = 'Prediction: {}'.format(
-            list(Action)[a_hat[(i-1) % len(a_hat)].argmax()]).replace('Action.', '')
-        plt.text(-5, -10, s_t1_str if i > len(a_hat) else s_t0_str)
+def visualize_env(s_t0, s_t1_, a_t0_, a_hat_, disp_size=None):
+    disp_size = disp_size or len(s_t0)
+    num_disps = ceil(len(s_t0)/disp_size)
+    for i in range(num_disps):
+        s_t0_ = s_t0[i*disp_size:(i+1)*disp_size]
+        s_t1_ = s_t1[i*disp_size:(i+1)*disp_size]
+        a_t0_ = a_t0[i*disp_size:(i+1)*disp_size]
+        a_hat_ = a_hat[i*disp_size:(i+1)*disp_size]
+        fig = plt.figure()
         plt.axis('off')
-        plt.imshow((s_t1 if i > len(a_hat) else s_t0)[
-                   (i-1) % len(a_hat)], interpolation='nearest')
+        rows = 2
+        cols = len(a_hat_)
+        for i in range(1, rows*cols + 1):
+            fig.add_subplot(rows, cols, i)
+            s_t0_str = 'True action: {}'.format(
+                a_t0_[(i-1) % len(a_hat_)]).replace('Action.', '')
+            s_t1_str = 'Prediction: {}'.format(
+                list(Action)[a_hat_[(i-1) % len(a_hat_)].argmax()]).replace('Action.', '')
+            plt.text(-5, -10, s_t1_str if i > len(a_hat_) else s_t0_str)
+            plt.axis('off')
+            plt.imshow((s_t1_ if i > len(a_hat_) else s_t0_)[
+                    (i-1) % len(a_hat_)], interpolation='nearest')
     plt.show()
 
 
@@ -418,6 +425,7 @@ def visualize_surprise(files, surprise, dataset, disp_size=None):
                 plt.text(-5, -10, txt)
                 plt.imshow(img)
             i += 3
+    plt.show()
 
 
 def init_viz():
@@ -607,6 +615,7 @@ if __name__ == "__main__":
                             if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
                                 print('cumul accuracy', round(
                                     (test_correct_guess*100)/test_total_guess, 2))
+                                visualize_env(s_t0, s_t1, a_t0, a_hat, disp_size=4)
 
                         ctr += BATCH_SIZE
 
@@ -660,7 +669,7 @@ if __name__ == "__main__":
 
                     if VISUALIZE:
                         visualize_surprise(*results[-1], ooc_sun_dataset, disp_size=4)
-                        plt.show()
+                        # plt.show()
 
             # with open('{0}-results.log'.format(args.run_id), 'w') as f:
             # f.write(json.dumps(results))
