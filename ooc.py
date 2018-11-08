@@ -331,9 +331,11 @@ class ActionEnvironment():
 
     def store(self, data, overwrite=False):
         # data is of shape [len(self.batch)], is stored at the coordinate of each image
-        for datum, cell, coord, adj in zip(data, self.storage, self.coords, self.adjusted_actions):
+        for datum, cell, coord in zip(data, self.storage, self.coords):
             # assume never submit 0 as data
-            if not overwrite:
+            if overwrite:
+                cell[tuple(coord)] = datum
+            else:
                 cell[tuple(coord)] = cell[tuple(coord)] or datum
 
     def step(self):
@@ -540,9 +542,10 @@ if __name__ == "__main__":
 
                         # manually keep track of action accuracy - 25% is random guess
                         adj_acts = env.adjusted_actions
-                        total_guess += len(batch['img']) - sum(adj_acts)
-                        correct_guess += sum(torch.argmax(actions_to_onehot(a_t0)[~adj_acts], dim=1)
-                                             == torch.argmax(a_hat[~adj_acts], dim=1)).item()
+                        if sum(adj_acts) < len(adj_acts):
+                            total_guess += len(batch['img']) - sum(adj_acts)
+                            correct_guess += sum(torch.argmax(actions_to_onehot(a_t0)[~adj_acts], dim=1)
+                                                == torch.argmax(a_hat[~adj_acts], dim=1)).item()
 
                         # calculate loss
                         with torch.no_grad():
@@ -611,9 +614,10 @@ if __name__ == "__main__":
                         if s_t0 is not None:
                             a_hat = apnet(s_t0, s_t1)  # inverse module
                             adj_acts = env.adjusted_actions
-                            test_total_guess += len(batch['img'])
-                            test_correct_guess += sum(torch.argmax(actions_to_onehot(a_t0)[~adj_acts], dim=1)
-                                                    == torch.argmax(a_hat, dim=1)[~adj_acts]).item()
+                            if sum(adj_acts) < len(adj_acts):
+                                test_total_guess += len(batch['img']) - sum(adj_acts)
+                                test_correct_guess += sum(torch.argmax(actions_to_onehot(a_t0)[~adj_acts], dim=1)
+                                                        == torch.argmax(a_hat, dim=1)[~adj_acts]).item()
                             if ctr > 0 and UPDATE_FREQ > 0 and ctr % UPDATE_FREQ == 0:
                                 print('cumul accuracy', round(
                                     (test_correct_guess*100)/test_total_guess, 2))
